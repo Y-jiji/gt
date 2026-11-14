@@ -1,7 +1,6 @@
 import { decodeOptions } from 'gt-i18n';
 import {
   createLookupOptions,
-  getI18nCache,
   getI18nConfig,
   interpolateMessage,
 } from 'gt-i18n/internal';
@@ -16,6 +15,7 @@ import type {
   StringFormat,
 } from '@generaltranslation/format';
 import { getLocaleDirection } from './config';
+import { requestMissingTranslation } from './devHotReload';
 import { getGTState, type GTState } from './state.svelte';
 
 /**
@@ -199,10 +199,12 @@ function createGT(state: GTState): GTFunctionType {
 
     let translation: string | undefined;
     if (config.requiresTranslation({ locale })) {
-      const cache = getI18nCache();
-      translation = cache.lookupTranslation(locale, message, lookupOptions) as
+      translation = state.lookupTranslation(locale, message, lookupOptions) as
         | string
         | undefined;
+      if (translation == null) {
+        requestMissingTranslation(state, locale, message, lookupOptions);
+      }
     }
 
     return interpolateMessage({
