@@ -9,10 +9,8 @@ export function useI18nStore(): I18nStore {
   return context?.i18nStore || getI18nStore();
 }
 
-export function useTranslationsSnapshot(): Record<
-  Locale,
-  Record<Hash, Content>
-> {
-  const context = useGTContext();
-  return context?.translationsSnapshot || {};
+export function useTranslationsSnapshot():
+  | Record<Locale, Record<Hash, Content>>
+  | undefined {
+  return useGTContext()?.translationsSnapshot;
 }
