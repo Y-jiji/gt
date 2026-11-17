@@ -48,7 +48,7 @@ export {
 export { decodeVars, declareVar, derive } from 'generaltranslation';
 export { getLocaleFromNativeStore } from './utils/nativeStore';
 export { getLocale } from './utils/getLocale';
-export { internalInitializeGTSRA as initializeGT } from '@generaltranslation/react-core/pure';
+export { initializeGT } from './setup/initializeGT';
 
 // ===== Types ===== //
 export type { GTTranslationOptions, RuntimeTranslationOptions } from 'gt-i18n';
