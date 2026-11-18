@@ -27,7 +27,7 @@ import {
 } from './unsplitTranslations';
 
 /** A file of the bundle, as Rollup, Rolldown and Vite pass it to a plugin. */
-type BundleFile = {
+export type BundleFile = {
   type: string;
   code?: string;
   /** The modules the bundler put into a chunk */
@@ -77,7 +77,7 @@ export type ChunkTranslationsManifest = {
 };
 
 /** The key of a locale's map, inside the directory of the build's assets. */
-const TRANSLATIONS_MAP_KEY = 'gt-map';
+export const TRANSLATIONS_MAP_KEY = 'gt-map';
 
 /**
  * The key of every file a build names by its own hash alone, inside the
@@ -116,7 +116,7 @@ export const createBundledCatalogsWarning = (files: string[]) =>
     fix: 'Pass loadTranslations to initializeGTSPA as a function or the name of one, in the object it is called with',
   });
 
-function getFileHash(source: string): string {
+export function getFileHash(source: string): string {
   return getDigest(source).slice(0, FILE_HASH_LENGTH);
 }
 
@@ -157,7 +157,7 @@ export function getContentHashes(
 }
 
 /** The translations of `hashes` that `locale` has, in their order. */
-function pickTranslations(
+export function pickTranslations(
   translations: Record<string, unknown>,
   hashes: string[]
 ): Record<string, unknown> {
@@ -241,23 +241,11 @@ export function renderChunkTranslations(
     imports: Object.fromEntries(assignment.imports),
   };
   const entryHashes = new Map<string, Record<string, string>>();
-  const unsplitHashes: Record<string, string> = {};
-  const unsplitFiles: { locale: string; count: number; bytes: number }[] = [];
-  for (const [locale, translations] of Object.entries(
-    unsplit?.translations ?? {}
-  )) {
-    const source = JSON.stringify(translations);
-    const hash = getFileHash(source);
-    const fileName = getFileName(unsplit!.key, locale, hash);
-    files.push({ fileName, source });
-    unsplitHashes[locale] = hash;
-    (manifest.unsplit ??= {})[locale] = fileName;
-    unsplitFiles.push({
-      locale,
-      count: Object.keys(translations).length,
-      bytes: Buffer.byteLength(source),
-    });
-  }
+  const { unsplitHashes, unsplitFiles } = renderUnsplitFiles(
+    unsplit,
+    files,
+    manifest
+  );
 
   const imported = renderImportedFiles(assignment.imports);
   const tokens: Record<string, string> = {};
@@ -345,7 +333,42 @@ export function renderChunkTranslations(
   return { files, manifest, unsplit: unsplitFiles, startupScripts };
 }
 
-function findBundledCatalogs(
+/**
+ * Adds the unsplit file of each locale that has one to `files` and to the
+ * manifest. Returns the hash in the name of each, and what each holds.
+ */
+export function renderUnsplitFiles(
+  unsplit:
+    | { key: string; translations: Record<string, Record<string, unknown>> }
+    | undefined,
+  files: { fileName: string; source: string }[],
+  manifest: { unsplit?: Record<string, string> }
+): {
+  unsplitHashes: Record<string, string>;
+  unsplitFiles: { locale: string; count: number; bytes: number }[];
+} {
+  const unsplitHashes: Record<string, string> = {};
+  const unsplitFiles: { locale: string; count: number; bytes: number }[] = [];
+  for (const [locale, translations] of Object.entries(
+    unsplit?.translations ?? {}
+  )) {
+    const source = JSON.stringify(translations);
+    const hash = getFileHash(source);
+    const fileName = getFileName(unsplit!.key, locale, hash);
+    files.push({ fileName, source });
+    unsplitHashes[locale] = hash;
+    (manifest.unsplit ??= {})[locale] = fileName;
+    unsplitFiles.push({
+      locale,
+      count: Object.keys(translations).length,
+      bytes: Buffer.byteLength(source),
+    });
+  }
+  return { unsplitHashes, unsplitFiles };
+}
+
+/** The translation files at `files.gt.output` that are modules of the build. */
+export function findBundledCatalogs(
   chunks: BundleFile[],
   gtFiles: GTOutputFileConfig,
   build: Pick<ChunkTranslations, 'locales'>
@@ -376,7 +399,7 @@ export function loadChunkTranslationsTable(
 }
 
 // gt-react's getFileUrl() reads files by the same name
-function getFileName(key: string, locale: string, hash: string): string {
+export function getFileName(key: string, locale: string, hash: string): string {
   return `${key}.${locale}.${hash}.json`;
 }
 
