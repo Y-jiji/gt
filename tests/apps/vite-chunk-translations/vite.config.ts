@@ -1,7 +1,7 @@
 import { resolve } from 'node:path';
 import react from '@vitejs/plugin-react';
 import { vite as gtCompiler } from '@generaltranslation/compiler';
-import { defineConfig } from 'vite';
+import { defineConfig, type Plugin } from 'vite';
 import { collectMessages } from './scripts/collectMessages.mjs';
 
 // GT_CHUNK_TRANSLATIONS=true turns the feature on; scripts/check.mjs builds
@@ -14,11 +14,29 @@ const messagesFile = process.env.CHECK_MESSAGES;
 // more from a copy with a changed translation.
 const translations = process.env.CHECK_TRANSLATIONS ?? resolve('src/_gt');
 
+/**
+ * For scripts/check-module.mjs, with CHECK_ADD_IMPORT: the same app with one
+ * more static import, of the shared statuses by the Home route, which did
+ * not reach them.
+ */
+const addImport: Plugin = {
+  name: 'check:add-import',
+  enforce: 'pre',
+  transform(code, id) {
+    return id.endsWith('/src/routes/Home.tsx')
+      ? `import '../shared/statuses';\n${code}`
+      : null;
+  },
+};
+
 export default defineConfig({
   plugins: [
+    process.env.CHECK_ADD_IMPORT === 'true' && addImport,
     gtCompiler({
       _debugHashManifest: messagesFile !== undefined,
       files: { gt: { output: `${translations}/[locale].json` } },
+      // CHECK_GT_LOG=debug prints what the build did with the translations
+      ...(process.env.CHECK_GT_LOG === 'debug' && { logLevel: 'debug' }),
     }),
     react(),
     messagesFile !== undefined && collectMessages(messagesFile),
@@ -34,6 +52,23 @@ export default defineConfig({
   build: {
     outDir: process.env.CHECK_OUT_DIR ?? 'dist',
     // plain.html is the app without messages that are not split by chunk
-    rollupOptions: { input: process.env.CHECK_ENTRY ?? 'index.html' },
+    rollupOptions: {
+      input: process.env.CHECK_ENTRY ?? 'index.html',
+      output: {
+        // For scripts/check-module.mjs. CHECK_LAZY: a module runs when it is
+        // first imported, not when its chunk loads. CHECK_SHARED_CHUNK: the
+        // shared modules, which different routes use, are one chunk.
+        ...(process.env.CHECK_LAZY === 'true' && {
+          strictExecutionOrder: true,
+        }),
+        ...(process.env.CHECK_SHARED_CHUNK === 'true' && {
+          codeSplitting: {
+            // Without what they import, or React would move in with them
+            includeDependenciesRecursively: false,
+            groups: [{ name: 'shared', test: /\/src\/shared\// }],
+          },
+        }),
+      },
+    },
   },
 });
