@@ -102,6 +102,150 @@ export function renderMessage(
       });
 }
 
+/**
+ * A call site whose message a compiler built ahead of time: its hash, source
+ * tree and literal options, passed to the GT with the values in place of the
+ * template. The compiler declares a message with values once, at module
+ * scope, and writes a message that is text at its call.
+ */
+export type PrecomputedMessage = MessageTreeHashMetadata & {
+  $_hash: string;
+  $_tree: MessageTree;
+  /** The formatting context of the tree's variables, when it is static. */
+  $_formats?: MessageFormats;
+  /** What a message with values last resolved to; set as it renders. */
+  $_resolved?: ResolvedMessage;
+};
+
+/** The conditions of a render; one object while they stay the same. */
+type Conditions = {
+  config: I18nConfig;
+  locale: string;
+  enabled: boolean;
+};
+
+/**
+ * What a message resolved to, kept while the conditions and the looked-up
+ * catalog entry stay the same objects.
+ */
+type ResolvedMessage = {
+  conditions: Conditions;
+  options: MessageTreeLookupOptions | undefined;
+  /** The catalog entry last read. */
+  entry: unknown;
+  /** That entry once validated. */
+  translation: MessageTree | undefined;
+};
+
+const NO_VALUES: Record<string, unknown> = {};
+const NO_FORMATS: MessageFormats = {};
+// No catalog holds this object, so the first lookup always differs from it.
+const NOT_READ = {};
+
+export function isPrecomputedMessage(
+  value: object
+): value is PrecomputedMessage {
+  return (value as PrecomputedMessage).$_tree !== undefined;
+}
+
+// Renders come in runs of one locale, so the last conditions are kept.
+let lastConditions: Conditions | undefined;
+
+function resolveConditions(locale: string, enabled: boolean): Conditions {
+  const config = getI18nConfig();
+  if (
+    lastConditions?.locale === locale &&
+    lastConditions.enabled === enabled &&
+    lastConditions.config === config
+  ) {
+    return lastConditions;
+  }
+  return (lastConditions = { config, locale, enabled });
+}
+
+/**
+ * Renders a precomputed message like renderMessage renders its template:
+ * the same lookup, validation, formatting, fallback and cutoff. The lookup
+ * still runs on every call, so a replaced catalog entry is seen at once.
+ */
+export function renderPrecomputedMessage(
+  site: PrecomputedMessage,
+  values: Record<string, unknown> = NO_VALUES,
+  formats: MessageFormats = site.$_formats ?? NO_FORMATS,
+  locale: string,
+  enabled: boolean,
+  lookupTranslation: LookupTreeTranslation
+): string {
+  const conditions = resolveConditions(locale, enabled);
+  const tree = site.$_tree;
+  const hash = site.$_hash;
+  let translation: MessageTree | undefined;
+  if (typeof tree === 'string') {
+    // Text is written at its call, so nothing of it is kept between renders.
+    // Disabled skips every lookup, including custom ones with default-locale entries.
+    const entry = enabled
+      ? lookupTranslation(
+          tree,
+          createMessageTreeLookupOptions(tree, locale, site)
+        )
+      : undefined;
+    translation =
+      entry === tree ? tree : lookupTreeTranslation(entry, locale, hash);
+  } else {
+    let resolved = site.$_resolved;
+    if (resolved?.conditions !== conditions) {
+      resolved = site.$_resolved = {
+        conditions,
+        options: undefined,
+        entry: NOT_READ,
+        translation: undefined,
+      };
+    }
+    const entry = enabled
+      ? lookupTranslation(
+          tree,
+          (resolved.options ??= createMessageTreeLookupOptions(
+            tree,
+            locale,
+            site
+          ))
+        )
+      : undefined;
+    if (entry !== resolved.entry) {
+      resolved.entry = entry;
+      // The compiler built the site's own tree, the default locale's entry.
+      resolved.translation =
+        entry === tree ? tree : lookupTreeTranslation(entry, locale, hash);
+    }
+    ({ translation } = resolved);
+  }
+
+  const { config } = conditions;
+  const { maxChars } = site;
+  const defaultLocale = config.getDefaultLocale();
+  let outputLocale = defaultLocale;
+  let output: string | undefined;
+  // An empty translation is the text '', not a missing one.
+  if (translation !== undefined) {
+    try {
+      output = formatTree(translation, locale, values, formats);
+      outputLocale = locale;
+    } catch (error) {
+      warnOnce(
+        `format:${locale}:${hash}`,
+        createTranslationFormatWarning(locale, hash, error)
+      );
+    }
+  }
+  output ??= formatTree(tree, defaultLocale, values, formats);
+  return maxChars == null
+    ? output
+    : formatCutoff(output, {
+        locales: config.resolveCanonicalLocale(outputLocale),
+        maxChars,
+      });
+}
+
 /** The lookup options of a tree in `locale`, hashing it unless `$_hash` is set. */
 export function createMessageTreeLookupOptions(
   tree: MessageTree,
