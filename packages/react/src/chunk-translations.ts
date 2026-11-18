@@ -17,7 +17,10 @@
  *   those lists with its JavaScript. A file's URL is its key, the locale and
  *   the locale's token, which the startup script holds, so the script can
  *   request the files of chunks the page preloads before any module runs;
- *   those requests are read here, not made again.
+ *   those requests are read here, not made again. A build can instead name
+ *   each file by the hash of what it holds alone (the compiler's `map`
+ *   naming): one more file per locale, the map, then says which file is each
+ *   chunk's and which files an import needs. See `loadMappedChunk()`.
  * - The translations of the files a load needs are added to gt-react's
  *   translations cache, in one call, when the load's import runs, where `<T>`,
  *   `t` and every other API look them up by hash. Files that arrive before the
@@ -43,7 +46,11 @@ import type { Content } from '@generaltranslation/format';
 
 type Translations = Record<string, Content>;
 
-/** The entry's file for a locale. */
+/**
+ * The entry's file for a locale. A locale's map, in a build that names each
+ * file by its own hash, is the same without translations: there the entry's
+ * file holds only those, and the map what names a chunk.
+ */
 type EntryFile = {
   /** The translations of the entry chunk and its static imports, by hash */
   t?: Translations;
@@ -53,7 +60,8 @@ type EntryFile = {
 
 /**
  * The files each dynamic import needs, as the compiler's
- * `renderImportedFiles()` writes them.
+ * `renderImportedFiles()` writes them. The entry's file holds them, and in a
+ * build that names each file by its own hash, the locale's map does.
  */
 type ImportedFiles = {
   /** The keys of those files and of the imported chunks */
@@ -64,6 +72,11 @@ type ImportedFiles = {
    * `k` in pairs of the first and how many follow on from it.
    */
   c: (number[] | 0 | undefined)[];
+  /**
+   * In a locale's map: the hash in the name of the file whose key is at the
+   * same place in `k`, 0 when the locale has no such file
+   */
+  h?: (string | 0 | undefined)[];
 };
 
 /** Vite's preload call, which adds links for `deps` and then calls `load`. */
@@ -81,7 +94,11 @@ type PreloadChunk<T> = (
 export type ChunkTranslationsState = {
   /** The URL the build's files are served from */
   b?: string;
-  /** The key of the entry's file: the entry chunk's file without its extension */
+  /**
+   * The key of the entry's file: the entry chunk's file without its
+   * extension. In a build that names each file by its own hash, the key of
+   * every file that holds translations.
+   */
   f?: string;
   /** The hash in the name of the entry's file, by locale */
   h?: Record<string, string>;
@@ -95,15 +112,14 @@ export type ChunkTranslationsState = {
   k?: string;
   /** The maps the startup script requested, by locale */
   m?: Record<string, Promise<unknown> | undefined>;
-  /** The hash in the name of each file, from the maps that have arrived, by locale and key */
-  c?: Record<string, Record<string, string>>;
   /** The locale the startup script read */
   l?: string;
   /** The entry's files the startup script requested, by locale */
   p?: Record<string, Promise<unknown> | undefined>;
   /**
    * The files of preloaded chunks the startup script requested, by locale
-   * and key
+   * and key. In a build that names each file by its own hash, by locale and
+   * that hash, as chunks whose files hold the same have one file.
    */
   g?: Record<string, Promise<unknown> | undefined>;
   /** Milliseconds to wait for a file */
@@ -115,11 +131,14 @@ export type ChunkTranslationsState = {
   t?: Record<string, Translations>;
   /** Whether the translations cache has loaded the locale */
   y?: boolean;
-  /** The files each dynamic import needs, once an entry's file has arrived */
+  /**
+   * The files each dynamic import needs, once the file that holds them has
+   * arrived: an entry's file, or the locale's map
+   */
   i?: ImportedFiles;
   /**
    * Whether each requested file arrived in time: the entry's by locale, any
-   * other by locale and key
+   * other by what the startup script requests it by
    */
   r?: Record<string, Promise<boolean> | undefined>;
 };
@@ -154,11 +173,16 @@ export function loadChunk<T>(
   deps?: string[],
   url?: string
 ): Promise<T> {
-  return gateChunk(requestFile, start, chunk, preload, deps, url);
+  return gateChunk(requestFile, requestEntry, start, chunk, preload, deps, url);
 }
 
+/**
+ * @param request Requests one of the import's files.
+ * @param requestLists Requests the file that says which files an import needs.
+ */
 function gateChunk<T>(
   request: typeof requestFile,
+  requestLists: typeof requestEntry,
   start: () => Promise<T>,
   named: string | 0,
   preload: PreloadChunk<T> | undefined,
@@ -177,10 +201,15 @@ function gateChunk<T>(
         request(state, locale, file)
       )
     );
-  // Which files the import needs is known once the entry's file has arrived
-  const translations = state.i
+  // Which files the import needs is known once the file that lists them has arrived
+  const files = state.i
     ? requestFiles()
-    : requestEntry(state, locale).then(requestFiles);
+    : requestLists(state, locale).then(requestFiles);
+  // The entry's file holds the messages the import's files leave out
+  const translations =
+    requestLists === requestEntry
+      ? files
+      : Promise.all([files, requestEntry(state, locale)]);
   // The bundler preloads the chunk when it lists it
   if (named || !preload) preloadChunk(state, chunk);
   return run(() =>
@@ -301,9 +330,9 @@ export function initializeMappedChunkTranslations<C extends InitializeConfig>(
 }
 
 /**
- * `loadChunk()` for such a build: the hash in a file's name comes from the
- * map, so a file is requested once the map has arrived, and the import runs
- * once both have.
+ * `loadChunk()` for such a build: the map says which files the import needs
+ * and the hash in the name of each, so a file is requested once the map has
+ * arrived, and the import runs once both have.
  * @internal
  */
 export function loadMappedChunk<T>(
@@ -313,7 +342,15 @@ export function loadMappedChunk<T>(
   deps?: string[],
   url?: string
 ): Promise<T> {
-  return gateChunk(requestMappedFile, start, chunk, preload, deps, url);
+  return gateChunk(
+    requestMappedFile,
+    requestMap,
+    start,
+    chunk,
+    preload,
+    deps,
+    url
+  );
 }
 
 /** `loadChunkTranslations()` for such a build. */
@@ -333,24 +370,23 @@ function requestMappedFile(
   locale: string,
   file: string
 ): Promise<boolean> {
-  const hashes = state.c?.[locale];
-  if (!hashes) {
+  const listed = state.i;
+  if (!listed) {
     return requestMap(state, locale).then((loaded) =>
-      loaded && state.c?.[locale]
-        ? requestMappedFile(state, locale, file)
-        : false
+      loaded && state.i ? requestMappedFile(state, locale, file) : false
     );
   }
-  const hash = hashes[file];
+  const hash = listed.h?.[listed.k.indexOf(file)];
   // The map lists the files that exist
-  if (hash === undefined) return Promise.resolve(true);
-  const key = `${locale} ${file}`;
+  if (!hash || state.f === undefined) return Promise.resolve(true);
+  // Named by what it holds alone, so chunks whose files hold the same share it
+  const key = `${locale} ${hash}`;
   const requested = state.g?.[key];
   if (requested) state.g![key] = undefined;
   return request(
     state,
     key,
-    getFileUrl(state, file, locale, hash),
+    getFileUrl(state, state.f, locale, hash),
     requested,
     (translations: Translations) => register(state, locale, translations)
   );
@@ -372,8 +408,8 @@ function requestMap(
     `map ${locale}`,
     getFileUrl(state, state.k, locale, token),
     requested,
-    (hashes: Record<string, string>) => {
-      (state.c ||= {})[locale] = hashes;
+    (map: EntryFile) => {
+      state.i = map.i;
     }
   );
 }
@@ -411,7 +447,8 @@ function requestEntry(
     requested,
     (file: EntryFile) => {
       register(state, locale, file.t);
-      state.i = file.i;
+      // Elsewhere when the build has maps
+      if (file.i) state.i = file.i;
     }
   );
 }

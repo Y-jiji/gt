@@ -59,10 +59,15 @@ export interface PluginConfig
    * - `'token'` (the default): by one token per locale, which the page holds.
    *   A file's URL follows from its chunk's, so the page requests the files
    *   of the chunks it preloads without waiting for anything. Any change to a
-   *   locale's translations renames all of that locale's files.
-   * - `'map'`: each by the hash of its own content, with one small map of
-   *   those hashes per locale that the page requests first. A change renames
-   *   only the files it changes, and the files of chunks wait for the map.
+   *   locale's translations renames all of that locale's files, and so does
+   *   any change to JavaScript that renames a chunk, as a bundler names a
+   *   chunk by its content and by the chunks it imports.
+   * - `'map'`: each by the locale and the hash of its own content alone, with
+   *   one small map per locale that the page requests first, which says
+   *   which file is each chunk's. A changed translation renames only the
+   *   files it is in and the map, a change to JavaScript alone only the map,
+   *   and the files of chunks wait for the map. The naming for an app that
+   *   deploys often.
    *
    * Defaults to the `GT_CHUNK_TRANSLATIONS_NAMING` environment variable.
    */

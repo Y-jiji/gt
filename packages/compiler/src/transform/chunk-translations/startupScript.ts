@@ -11,7 +11,11 @@ import { CHUNK_TRANSLATIONS_GLOBAL } from './resolveChunkTranslations';
 export type StartupState = {
   /** The URL the build's files are served from */
   b: string;
-  /** The entry chunk's file, without its extension */
+  /**
+   * The key of the entry's file: the entry chunk's file without its
+   * extension, or in a build that names each file by its own hash, the key
+   * of every file that holds translations
+   */
   f: string;
   /** The hash in the name of the entry's file, by locale */
   h: Record<string, string>;
@@ -213,6 +217,10 @@ function startPreloadedTranslations(
  * it has arrived, the file of each chunk the page preloads that the map
  * lists. gt-react reads the map and those requests. The files of preloaded
  * chunks therefore start one round trip after the page does.
+ *
+ * Such a file is named like the entry's, by the entry's key, the locale and
+ * its hash, and chunks whose files hold the same have one file, which is
+ * requested once.
  */
 function startMappedTranslations(
   state: StartupState & {
@@ -227,7 +235,7 @@ function startMappedTranslations(
   const locale = state.l;
   const token = locale && state.v[locale];
   if (!locale || !token) return;
-  const map: Promise<Record<string, string>> = fetch(
+  const map: Promise<{ i?: { k: string[]; h?: (string | 0)[] } }> = fetch(
     state.b + key + '.' + locale + '.' + token + '.json'
   ).then((response) => {
     if (!response.ok) throw new Error('HTTP ' + response.status);
@@ -236,7 +244,10 @@ function startMappedTranslations(
   state.m = { [locale]: map };
   const requested: Record<string, Promise<unknown>> = (state.g = {});
   map
-    .then((hashes) => {
+    .then((file) => {
+      const listed = file.i;
+      const hashes = listed && listed.h;
+      if (!hashes) return;
       const request = (link: HTMLLinkElement): void => {
         if (link.rel !== 'modulepreload') return;
         const path = link.href
@@ -245,12 +256,12 @@ function startMappedTranslations(
           .split('/');
         // After the origin, the longest end of the path that is a key
         for (let start = 3; start < path.length; start++) {
-          const file = path.slice(start).join('/');
-          const id = locale + ' ' + file;
-          if (!hashes[file]) continue;
+          const hash = hashes[listed.k.indexOf(path.slice(start).join('/'))];
+          if (!hash) continue;
+          const id = locale + ' ' + hash;
           if (!requested[id] && !(state.r && state.r[id])) {
             const translations = fetch(
-              state.b + file + '.' + locale + '.' + hashes[file] + '.json'
+              state.b + state.f + '.' + locale + '.' + hash + '.json'
             ).then((response) => {
               if (!response.ok) throw new Error('HTTP ' + response.status);
               return response.json();

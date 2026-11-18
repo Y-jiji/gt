@@ -436,29 +436,35 @@ describe('gt-react/chunk-translations', () => {
 
   describe('in a build that names each file by its own hash', () => {
     const MAP = '/assets/gt-map.fr.22222222.json';
-    // The import of the Orders chunk also needs the file of a shared chunk
-    const IMPORTED_SHARED = {
-      k: ['assets/Badge-c3', 'assets/Orders-b2'],
-      c: [0, [1, 0, 1]],
+    // Named by the locale and the hash of what they hold, and by no chunk
+    const ENTRY_FILE = '/assets/gt.fr.11111111.json';
+    const MAPPED_ORDERS_FILE = '/assets/gt.fr.33333333.json';
+    // What names a chunk is in the map: the import of the Orders chunk also
+    // needs the file of a shared chunk, which this locale has none of
+    const LISTED = {
+      i: {
+        k: ['assets/Badge-c3', 'assets/Orders-b2'],
+        c: [0, [1, 0, 1]],
+        h: [0, '33333333'],
+      },
     };
     const MAPPED: Files = {
-      '/assets/index-a1.fr.11111111.json': {
-        t: { [SAVE]: 'Enregistrer' },
-        i: IMPORTED_SHARED,
-      },
-      [MAP]: { 'assets/Orders-b2': '33333333' },
-      '/assets/Orders-b2.fr.33333333.json': { [ORDERS]: 'Commandes' },
+      [ENTRY_FILE]: { t: { [SAVE]: 'Enregistrer' } },
+      [MAP]: LISTED,
+      [MAPPED_ORDERS_FILE]: { [ORDERS]: 'Commandes' },
     };
+    const writeMapped = (state: Partial<ChunkTranslationsState> = {}) =>
+      writeState({ f: 'assets/gt', k: 'assets/gt-map', ...state });
     const startMapped = () =>
       initializeMappedChunkTranslations(initializeGTSPA, CONFIG);
 
     it('reads the map when the app starts, then requests the files it lists with their imports', async () => {
       const fetched = serve(MAPPED);
-      writeState({ k: 'assets/gt-map' });
+      writeMapped();
       await startMapped();
       await tick();
       expect(fetched.mock.calls.flat().sort()).toEqual(
-        ['/assets/index-a1.fr.11111111.json', MAP].sort()
+        [ENTRY_FILE, MAP].sort()
       );
       fetched.mockClear();
 
@@ -467,16 +473,62 @@ describe('gt-react/chunk-translations', () => {
         evaluated: 'Commandes',
       });
 
-      expect(fetched.mock.calls).toEqual([
-        ['/assets/Orders-b2.fr.33333333.json'],
-      ]);
+      expect(fetched.mock.calls).toEqual([[MAPPED_ORDERS_FILE]]);
       expect(warn).not.toHaveBeenCalled();
+    });
+
+    it('requests a file that two chunks have once', async () => {
+      const fetched = serve({
+        ...MAPPED,
+        [MAP]: {
+          i: {
+            k: ['assets/Orders-b2', 'assets/Settings-e5'],
+            c: [[1], [1]],
+            h: ['33333333', '33333333'],
+          },
+        },
+      });
+      writeMapped();
+      await startMapped();
+      await tick();
+      fetched.mockClear();
+
+      await Promise.all([
+        plainImport([])(loadMappedChunk),
+        loadMappedChunk(evaluate([]), 'assets/Settings-e5.js'),
+      ]);
+
+      expect(fetched.mock.calls).toEqual([[MAPPED_ORDERS_FILE]]);
+      expect(orders()).toBe('Commandes');
+    });
+
+    it("waits for the entry's file too, when the import starts before it has arrived", async () => {
+      const entry = hold(MAPPED[ENTRY_FILE]);
+      const fetched = serve({ ...MAPPED, [ENTRY_FILE]: entry.response });
+      writeMapped();
+      const starting = startMapped();
+      const steps: string[] = [];
+
+      const loading = preloadedImport(steps)(loadMappedChunk);
+      await tick();
+      // The map and the file it lists have arrived
+      expect(fetched.mock.calls.flat()).toEqual([
+        ENTRY_FILE,
+        MAP,
+        MAPPED_ORDERS_FILE,
+      ]);
+      expect(steps).toEqual([PRELOAD]);
+
+      entry.respond();
+      expect(await loading).toEqual({ evaluated: 'Commandes' });
+      await starting;
+      expect(save()).toBe('Enregistrer');
     });
 
     it('runs an import once the map and then the files it lists have arrived', async () => {
       const map = hold(MAPPED[MAP]);
       const fetched = serve({ ...MAPPED, [MAP]: map.response });
-      writeState({ k: 'assets/gt-map' });
+      writeMapped();
       await startMapped();
       fetched.mockClear();
       const steps: string[] = [];
@@ -489,21 +541,17 @@ describe('gt-react/chunk-translations', () => {
 
       map.respond();
       expect(await loading).toEqual({ evaluated: 'Commandes' });
-      expect(fetched.mock.calls).toEqual([
-        ['/assets/Orders-b2.fr.33333333.json'],
-      ]);
+      expect(fetched.mock.calls).toEqual([[MAPPED_ORDERS_FILE]]);
     });
 
     it('reads the requests the startup script made instead of making others', async () => {
       const fetched = serve(MAPPED);
-      writeState({
-        k: 'assets/gt-map',
+      writeMapped({
         l: 'fr',
-        p: {
-          fr: Promise.resolve({ t: { [SAVE]: 'Du script' }, i: IMPORTED }),
-        },
-        m: { fr: Promise.resolve({ 'assets/Orders-b2': '33333333' }) },
-        g: { 'fr assets/Orders-b2': Promise.resolve({ [ORDERS]: 'Du lien' }) },
+        p: { fr: Promise.resolve({ t: { [SAVE]: 'Du script' } }) },
+        m: { fr: Promise.resolve(LISTED) },
+        // By the hash of the file, which more than one chunk can have
+        g: { 'fr 33333333': Promise.resolve({ [ORDERS]: 'Du lien' }) },
       });
 
       await startMapped();
@@ -517,7 +565,7 @@ describe('gt-react/chunk-translations', () => {
       const files = { ...MAPPED };
       delete files[MAP];
       serve(files);
-      writeState({ k: 'assets/gt-map' });
+      writeMapped();
 
       await startMapped();
       expect(await preloadedImport([])(loadMappedChunk)).toEqual({

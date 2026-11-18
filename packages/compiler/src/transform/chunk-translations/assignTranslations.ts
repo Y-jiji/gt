@@ -242,7 +242,9 @@ export function assignTranslationsByChunk(
  * The files each dynamic import needs, as the entry's file of every locale
  * holds them and gt-react's `listImportedFiles()` reads them. Compiled code
  * names only the chunk it imports, so no page downloads these lists with its
- * JavaScript, and a page in the default locale never does.
+ * JavaScript, and a page in the default locale never does. In a build that
+ * names each file by its own hash, the locale's map holds them instead, with
+ * those hashes (see renderMappedFiles).
  */
 export type ImportedFiles = {
   /**
@@ -257,6 +259,11 @@ export type ImportedFiles = {
    * follow on from it.
    */
   c: (number[] | 0)[];
+  /**
+   * In a locale's map: the hash in the name of the file whose key is at the
+   * same place in `k`, 0 when the locale has no such file.
+   */
+  h?: (string | 0)[];
 };
 
 /** Undefined when no import needs a file. */
@@ -296,6 +303,33 @@ export function renderImportedFiles(
   }
   while (c[c.length - 1] === 0) c.pop();
   return { k, c };
+}
+
+/**
+ * A locale's map, in a build that names each file by its own hash: the files
+ * each dynamic import needs and the hash in the name of every file, by its
+ * key. Everything that names a chunk is here, so no other file of the locale
+ * changes when only the names of chunks do. Undefined when the locale has no
+ * file and no import needs one.
+ *
+ * @param hashes The hash in the name of each of the locale's files, by its key.
+ */
+export function renderMappedFiles(
+  imported: ImportedFiles | undefined,
+  hashes: Readonly<Record<string, string>>
+): ImportedFiles | undefined {
+  const listed = new Set(imported?.k);
+  // A file no import lists is one a page requests for a chunk it loads itself
+  const k = [
+    ...(imported?.k ?? []),
+    ...Object.keys(hashes)
+      .filter((key) => !listed.has(key))
+      .sort(),
+  ];
+  if (!k.length) return undefined;
+  const h: (string | 0)[] = k.map((key) => hashes[key] ?? 0);
+  while (h[h.length - 1] === 0) h.pop();
+  return { k, c: imported?.c ?? [], h };
 }
 
 // What Vite writes after a dynamic import: the chunks to preload with it,

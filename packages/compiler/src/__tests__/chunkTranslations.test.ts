@@ -27,6 +27,7 @@ import {
   renderImportedFiles,
   replaceImportedChunks,
   type AssignedChunk,
+  type TranslationAssignment,
 } from '../transform/chunk-translations/assignTranslations';
 import { wrapDynamicImports } from '../transform/chunk-translations/chunkTranslationsModule';
 import {
@@ -756,14 +757,21 @@ export const { a } = await import(\`./a.js\`);`,
       imports: new Map(),
     };
     const FR = { title: 'Titre', home: 'Accueil', orders: 'Commandes' };
-    const render = (fr: Record<string, unknown> = FR) =>
+    const render = (
+      fr: Record<string, unknown> = FR,
+      assignment: TranslationAssignment = ASSIGNMENT
+    ) =>
       renderChunkTranslations(
-        ASSIGNMENT,
+        assignment,
         { defaultLocale: 'en', locales: ['fr', 'de'] },
         { fr, de: { home: 'Start' } },
         '/',
         undefined,
-        { key: 'assets/gt-map' }
+        { key: 'assets/gt-map', files: 'assets/gt' }
+      );
+    const read = ({ files }: ReturnType<typeof render>) =>
+      Object.fromEntries(
+        files.map(({ fileName, source }) => [fileName, JSON.parse(source)])
       );
 
     it.each([
@@ -808,56 +816,144 @@ export const { a } = await import(\`./a.js\`);`,
       );
     });
 
-    it('writes each file that holds something, the map of their hashes, and the manifest', () => {
-      const { files, manifest } = render();
-      const byName = Object.fromEntries(
-        files.map(({ fileName, source }) => [fileName, JSON.parse(source)])
-      );
-      expect(byName).toEqual({
-        'assets/Home.fr.634cb4aa.json': { home: 'Accueil' },
-        'assets/Orders.fr.8e28fd5e.json': { orders: 'Commandes' },
-        'assets/gt-map.fr.c8201162.json': {
-          'assets/Home': '634cb4aa',
-          'assets/Orders': '8e28fd5e',
+    it('writes each file that holds something by its hash alone, the map of what names a chunk, and the manifest', () => {
+      const rendered = render();
+      const { manifest } = rendered;
+      expect(read(rendered)).toEqual({
+        'assets/gt.fr.634cb4aa.json': { home: 'Accueil' },
+        'assets/gt.fr.8e28fd5e.json': { orders: 'Commandes' },
+        'assets/gt-map.fr.17c1d14b.json': {
+          i: {
+            k: ['assets/Home', 'assets/Orders'],
+            c: [],
+            h: ['634cb4aa', '8e28fd5e'],
+          },
         },
-        'assets/index.fr.0e97fb55.json': { t: { title: 'Titre' } },
+        'assets/gt.fr.0e97fb55.json': { t: { title: 'Titre' } },
         // No file for Orders, which has no translation in de
-        'assets/Home.de.94ca6839.json': { home: 'Start' },
-        'assets/gt-map.de.f0290a93.json': { 'assets/Home': '94ca6839' },
-        'assets/index.de.c9f7dd1b.json': { t: {} },
+        'assets/gt.de.94ca6839.json': { home: 'Start' },
+        'assets/gt-map.de.9215aa4e.json': {
+          i: { k: ['assets/Home'], c: [], h: ['94ca6839'] },
+        },
+        'assets/gt.de.c9f7dd1b.json': { t: {} },
       });
       expect(manifest.maps).toEqual({
-        fr: 'assets/gt-map.fr.c8201162.json',
-        de: 'assets/gt-map.de.f0290a93.json',
+        fr: 'assets/gt-map.fr.17c1d14b.json',
+        de: 'assets/gt-map.de.9215aa4e.json',
       });
       expect(manifest.files).toEqual({
         'assets/Home': {
-          fr: 'assets/Home.fr.634cb4aa.json',
-          de: 'assets/Home.de.94ca6839.json',
+          fr: 'assets/gt.fr.634cb4aa.json',
+          de: 'assets/gt.de.94ca6839.json',
         },
-        'assets/Orders': { fr: 'assets/Orders.fr.8e28fd5e.json' },
+        'assets/Orders': { fr: 'assets/gt.fr.8e28fd5e.json' },
+      });
+      expect(manifest.entries['assets/index.js'].translations).toEqual({
+        fr: 'assets/gt.fr.0e97fb55.json',
+        de: 'assets/gt.de.c9f7dd1b.json',
       });
       const script = manifest.entries['assets/index.js'].startupScript;
-      expect(script).toContain('"v":{"fr":"c8201162","de":"f0290a93"}');
+      expect(script).toContain(
+        '{"b":"/","f":"assets/gt","h":{"fr":"0e97fb55","de":"c9f7dd1b"},"v":{"fr":"17c1d14b","de":"9215aa4e"}}'
+      );
       expect(script).toContain(
         '(window["__GT_CHUNK_TRANSLATIONS__"],"assets/gt-map");'
       );
       expect(script).not.toContain('startPreloadedTranslations');
     });
 
+    const names = (rendered: ReturnType<typeof render>) =>
+      rendered.files.map(({ fileName }) => fileName).sort();
+    const added = (
+      before: ReturnType<typeof render>,
+      after: ReturnType<typeof render>
+    ) => names(after).filter((name) => !names(before).includes(name));
+
     it('renames only the file a translation is in, and the map', () => {
-      const names = (fr: Record<string, unknown>) =>
-        render(fr)
-          .files.map(({ fileName }) => fileName)
-          .sort();
-      const before = names(FR);
-      expect(
-        names({ ...FR, home: 'Maison' }).filter(
-          (name) => !before.includes(name)
-        )
-      ).toEqual([
-        expect.stringMatching(/^assets\/Home\.fr\./),
+      expect(added(render(), render({ ...FR, home: 'Maison' }))).toEqual([
         expect.stringMatching(/^assets\/gt-map\.fr\./),
+        'assets/gt.fr.41269013.json',
+      ]);
+    });
+
+    it('renames only the maps when chunks are renamed, as by a change to JavaScript alone', () => {
+      const assign = (suffix: string): TranslationAssignment => ({
+        entries: new Map([[`assets/index-${suffix}.js`, ['title']]]),
+        files: new Map([
+          [`assets/Home-${suffix}`, ['home']],
+          [`assets/Orders-${suffix}`, ['orders']],
+        ]),
+        imports: new Map([
+          [`assets/Home-${suffix}.js`, [`assets/Home-${suffix}`]],
+          [
+            `assets/Orders-${suffix}.js`,
+            [`assets/Home-${suffix}`, `assets/Orders-${suffix}`],
+          ],
+        ]),
+      });
+      const before = render(FR, assign('a1'));
+      expect(added(before, render(FR, assign('b2')))).toEqual([
+        expect.stringMatching(/^assets\/gt-map\.de\./),
+        expect.stringMatching(/^assets\/gt-map\.fr\./),
+      ]);
+      // What names a chunk is in the map, and in no file that holds translations
+      const files = read(before);
+      expect(files[before.manifest.maps!.fr]).toEqual({
+        i: {
+          k: ['assets/Home-a1', 'assets/Orders-a1'],
+          c: [[1], [1, 0, 1]],
+          h: ['634cb4aa', '8e28fd5e'],
+        },
+      });
+      expect(
+        files[before.manifest.entries['assets/index-a1.js'].translations.fr]
+      ).toEqual({ t: { title: 'Titre' } });
+    });
+
+    it('writes files that hold the same once, for every chunk and entry they are of', () => {
+      const rendered = render(FR, {
+        entries: new Map([
+          ['assets/index.js', ['title']],
+          ['assets/admin.js', ['title']],
+        ]),
+        files: new Map([
+          ['assets/Home', ['home']],
+          ['assets/Start', ['home']],
+        ]),
+        imports: new Map(),
+      });
+      const { manifest } = rendered;
+      expect(names(rendered).filter((name) => name.includes('.fr.'))).toEqual([
+        'assets/gt-map.fr.41daeedc.json',
+        'assets/gt.fr.0e97fb55.json',
+        'assets/gt.fr.634cb4aa.json',
+      ]);
+      expect(manifest.files['assets/Start']).toEqual(
+        manifest.files['assets/Home']
+      );
+      expect(manifest.entries['assets/admin.js'].translations).toEqual(
+        manifest.entries['assets/index.js'].translations
+      );
+      expect(read(rendered)[manifest.maps!.fr].i.h).toEqual([
+        '634cb4aa',
+        '634cb4aa',
+      ]);
+    });
+
+    it('gives files whose hashes start alike longer ones, so no name is two files', () => {
+      // Both hashes start with 81e93a64
+      const rendered = render({
+        ...FR,
+        home: 'Accueil 353965',
+        orders: 'Commandes 28037',
+      });
+      expect(rendered.manifest.files).toMatchObject({
+        'assets/Home': { fr: 'assets/gt.fr.81e93a64b.json' },
+        'assets/Orders': { fr: 'assets/gt.fr.81e93a646.json' },
+      });
+      expect(read(rendered)[rendered.manifest.maps!.fr].i.h).toEqual([
+        '81e93a64b',
+        '81e93a646',
       ]);
     });
   });
@@ -1459,6 +1555,20 @@ export const unused = (name) => t\`Hello, \${{ name }}!\`;`,
       expect(script).not.toContain('startMappedTranslations');
     });
 
+    // A locale's map: the hash in the name of each chunk's file
+    const MAP = {
+      i: {
+        k: [
+          'assets/Orders-b2',
+          'assets/Glossary-c3',
+          'assets/Settings-e5',
+          'assets/Reports-f6',
+        ],
+        c: [],
+        h: ['aaaaaaaa', 'bbbbbbbb', 'aaaaaaaa', 0],
+      },
+    };
+
     it('with maps, requests the map with the entry file, then the files it lists for preloaded chunks', async () => {
       const { fetched, state, add } = run('', ['fr'], {
         maps: { key: 'assets/gt-map' },
@@ -1466,12 +1576,7 @@ export const unused = (name) => t\`Hello, \${{ name }}!\`;`,
           link('https://app.test/assets/Orders-b2.js'),
           link('https://app.test/assets/vendor-d4.js'),
         ],
-        responses: {
-          '/assets/gt-map.fr.44444444.json': {
-            'assets/Orders-b2': 'aaaaaaaa',
-            'assets/Glossary-c3': 'bbbbbbbb',
-          },
-        },
+        responses: { '/assets/gt-map.fr.44444444.json': MAP },
       });
       expect(fetched).toEqual([
         '/assets/index-a1.fr.11111111.json',
@@ -1482,44 +1587,45 @@ export const unused = (name) => t\`Hello, \${{ name }}!\`;`,
         m: { fr: expect.any(Promise) },
       });
 
+      // A file is named by the key of the entry's, the locale and its hash
       await new Promise((resolve) => setTimeout(resolve));
-      expect(fetched.slice(2)).toEqual(['/assets/Orders-b2.fr.aaaaaaaa.json']);
+      expect(fetched.slice(2)).toEqual(['/assets/index-a1.fr.aaaaaaaa.json']);
       add(link('https://app.test/assets/Glossary-c3.js'));
       add(link('https://app.test/assets/Orders-b2.js'));
-      expect(fetched.slice(3)).toEqual([
-        '/assets/Glossary-c3.fr.bbbbbbbb.json',
-      ]);
+      // Settings has the file Orders has, and Reports has none in this locale
+      add(link('https://app.test/assets/Settings-e5.js'));
+      add(link('https://app.test/assets/Reports-f6.js'));
+      expect(fetched.slice(3)).toEqual(['/assets/index-a1.fr.bbbbbbbb.json']);
     });
 
     it.each([
-      ['one token per locale', { files: FILES }, '44444444'],
+      [
+        'one token per locale',
+        { files: FILES },
+        'fr assets/Orders-b2',
+        '/assets/Glossary-c3.fr.44444444.json',
+      ],
       [
         'a map per locale',
         {
           maps: { key: 'assets/gt-map' },
-          responses: {
-            '/assets/gt-map.fr.44444444.json': {
-              'assets/Orders-b2': 'aaaaaaaa',
-              'assets/Glossary-c3': 'bbbbbbbb',
-            },
-          },
+          responses: { '/assets/gt-map.fr.44444444.json': MAP },
         },
-        'bbbbbbbb',
+        'fr aaaaaaaa',
+        '/assets/index-a1.fr.bbbbbbbb.json',
       ],
     ])(
       'with %s, requests no file gt-react has requested, for the link an import adds while the page loads',
-      async (_name, build, hash) => {
+      async (_name, build, requested, file) => {
         const { fetched, state, add } = run('', ['fr'], build);
         await new Promise((resolve) => setTimeout(resolve));
         const before = fetched.length;
-        state.r = { 'fr assets/Orders-b2': Promise.resolve(true) };
+        state.r = { [requested]: Promise.resolve(true) };
 
         add(link('https://app.test/assets/Orders-b2.js'));
         add(link('https://app.test/assets/Glossary-c3.js'));
 
-        expect(fetched.slice(before)).toEqual([
-          `/assets/Glossary-c3.fr.${hash}.json`,
-        ]);
+        expect(fetched.slice(before)).toEqual([file]);
       }
     );
 

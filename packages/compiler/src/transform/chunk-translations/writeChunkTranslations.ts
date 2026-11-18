@@ -12,6 +12,7 @@ import {
   findChunkHashes,
   getChunkKey,
   renderImportedFiles,
+  renderMappedFiles,
   type AssignedChunk,
   type TranslationAssignment,
 } from './assignTranslations';
@@ -51,7 +52,11 @@ export type ChunkTranslationsManifest = {
       startupScript: string;
     }
   >;
-  /** Every other translations file, by its key and locale */
+  /**
+   * Every other translations file, by its key and locale. In a build that
+   * names each file by its own hash, keys whose files hold the same are given
+   * one file.
+   */
   files: Record<string, Record<string, string>>;
   /**
    * The keys to pass gt-react's `loadChunkTranslations()` before a page that
@@ -65,13 +70,30 @@ export type ChunkTranslationsManifest = {
   unsplit?: Record<string, string>;
   /**
    * The map of each locale, in a build that names each file by its own hash:
-   * the hash in the name of every file under `files`, by its key.
+   * the hash in the name of every file under `files`, by its key, and the
+   * files each dynamic import needs.
    */
   maps?: Record<string, string>;
 };
 
 /** The key of a locale's map, inside the directory of the build's assets. */
 const TRANSLATIONS_MAP_KEY = 'gt-map';
+
+/**
+ * The key of every file a build names by its own hash alone, inside the
+ * directory of the build's assets: the files of chunks and of entries.
+ */
+const CONTENT_FILES_KEY = 'gt';
+
+/** Where a build that names each file by its own hash puts its files. */
+export type TranslationMaps = {
+  /** The key of the maps */
+  key: string;
+  /** The key of every file of a chunk or an entry */
+  files: string;
+};
+
+const FILE_HASH_LENGTH = 8;
 
 export const createMissingTranslationsWarning = (locales: string[]) =>
   createDiagnosticMessage({
@@ -95,7 +117,43 @@ export const createBundledCatalogsWarning = (files: string[]) =>
   });
 
 function getFileHash(source: string): string {
-  return createHash('sha256').update(source).digest('hex').slice(0, 8);
+  return getDigest(source).slice(0, FILE_HASH_LENGTH);
+}
+
+function getDigest(source: string): string {
+  return createHash('sha256').update(source).digest('hex');
+}
+
+/**
+ * The hash in the name of each file of a locale that has only that hash to
+ * tell it from the others, by the file's content. Files whose hashes start
+ * alike get longer ones, so a name stands for one content.
+ */
+export function getContentHashes(
+  sources: Iterable<string>
+): Map<string, string> {
+  const digests = new Map<string, string>();
+  const alike = new Map<string, string[]>();
+  for (const source of new Set(sources)) {
+    const digest = getDigest(source);
+    const short = digest.slice(0, FILE_HASH_LENGTH);
+    digests.set(source, digest);
+    alike.set(short, [...(alike.get(short) ?? []), digest]);
+  }
+  const hashes = new Map<string, string>();
+  for (const [source, digest] of digests) {
+    const others = alike.get(digest.slice(0, FILE_HASH_LENGTH))!;
+    let length = FILE_HASH_LENGTH;
+    while (
+      others.some(
+        (other) => other !== digest && other.startsWith(digest.slice(0, length))
+      )
+    ) {
+      length++;
+    }
+    hashes.set(source, digest.slice(0, length));
+  }
+  return hashes;
 }
 
 /** The translations of `hashes` that `locale` has, in their order. */
@@ -132,12 +190,16 @@ function pickTranslations(
  * HTML, do: a change to any of them gives all of them a new name, so each
  * name stays one content for good and can be cached as immutable.
  *
- * With `maps`, every other file is named by the hash of its own content
- * instead, and written only when it holds something. One more file per
- * locale, the map, holds the hash of each, and the startup script holds the
- * hash in the map's name. A change then renames only the files it changes
- * and the locale's map, and the files of chunks are requested once the map
- * has arrived.
+ * With `maps`, every file is named by the locale and the hash of its own
+ * content alone, the entry's too, and a chunk's file is written only when it
+ * holds something. No name holds a chunk's, so a build that changes only
+ * JavaScript, which renames chunks, renames no file that holds translations,
+ * and files that hold the same are one file. One more file per locale, the
+ * map, holds everything that names a chunk: the hash in the name of each
+ * chunk's file and the files each dynamic import needs (see
+ * renderMappedFiles). The startup script holds the hash in the map's name. A
+ * changed translation renames only the files it is in and the locale's map,
+ * and the files of chunks are requested once the map has arrived.
  */
 export function renderChunkTranslations(
   assignment: TranslationAssignment,
@@ -150,8 +212,8 @@ export function renderChunkTranslations(
     /** The translations of each locale that has such a file, see getUnsplitTranslations */
     translations: Record<string, Record<string, unknown>>;
   },
-  /** The key of the maps, in a build that names each file by its own hash */
-  maps?: { key: string }
+  /** Set in a build that names each file by its own hash */
+  maps?: TranslationMaps
 ): {
   files: { fileName: string; source: string }[];
   manifest: ChunkTranslationsManifest;
@@ -162,6 +224,15 @@ export function renderChunkTranslations(
 } {
   const locales = build.locales.filter((locale) => table[locale]);
   const files: { fileName: string; source: string }[] = [];
+  const written = new Set<string>();
+  /** Files named by their content have one name when they hold the same. */
+  const write = (fileName: string, source: string): string => {
+    if (!written.has(fileName)) files.push({ fileName, source });
+    written.add(fileName);
+    return fileName;
+  };
+  const getEntryKey = (entry: string) =>
+    maps ? maps.files : getChunkKey(entry);
   const manifest: ChunkTranslationsManifest = {
     defaultLocale: build.defaultLocale,
     locales,
@@ -195,20 +266,37 @@ export function renderChunkTranslations(
       ([key, hashes]) =>
         [key, JSON.stringify(pickTranslations(table[locale], hashes))] as const
     );
+    // The map holds the files each import needs; without one, the entry's file does
+    const entrySources = [...assignment.entries].map(
+      ([entry, hashes]) =>
+        [
+          entry,
+          JSON.stringify({
+            t: pickTranslations(table[locale], hashes),
+            ...(imported && !maps && { i: imported }),
+          }),
+        ] as const
+    );
+    // A chunk's file is written when it holds something
+    const held = sources.filter(([, source]) => source !== '{}');
+    const contentHashes = maps
+      ? getContentHashes([...held, ...entrySources].map(([, source]) => source))
+      : undefined;
     if (maps) {
       const hashes: Record<string, string> = {};
-      for (const [key, source] of sources) {
-        if (source === '{}') continue;
-        hashes[key] = getFileHash(source);
-        const fileName = getFileName(key, locale, hashes[key]);
-        files.push({ fileName, source });
-        (manifest.files[key] ??= {})[locale] = fileName;
+      for (const [key, source] of held) {
+        hashes[key] = contentHashes!.get(source)!;
+        (manifest.files[key] ??= {})[locale] = write(
+          getFileName(maps.files, locale, hashes[key]),
+          source
+        );
       }
-      const map = JSON.stringify(hashes);
+      const map = JSON.stringify({ i: renderMappedFiles(imported, hashes) });
       tokens[locale] = getFileHash(map);
-      const fileName = getFileName(maps.key, locale, tokens[locale]);
-      files.push({ fileName, source: map });
-      (manifest.maps ??= {})[locale] = fileName;
+      (manifest.maps ??= {})[locale] = write(
+        getFileName(maps.key, locale, tokens[locale]),
+        map
+      );
     } else {
       const token = getFileHash(JSON.stringify(sources));
       tokens[locale] = token;
@@ -218,16 +306,9 @@ export function renderChunkTranslations(
         (manifest.files[key] ??= {})[locale] = fileName;
       }
     }
-    for (const [entry, hashes] of assignment.entries) {
-      const source = JSON.stringify({
-        t: pickTranslations(table[locale], hashes),
-        ...(imported && { i: imported }),
-      });
-      const hash = getFileHash(source);
-      files.push({
-        fileName: getFileName(getChunkKey(entry), locale, hash),
-        source,
-      });
+    for (const [entry, source] of entrySources) {
+      const hash = contentHashes?.get(source) ?? getFileHash(source);
+      write(getFileName(getEntryKey(entry), locale, hash), source);
       let byLocale = entryHashes.get(entry);
       if (!byLocale) entryHashes.set(entry, (byLocale = {}));
       byLocale[locale] = hash;
@@ -240,7 +321,7 @@ export function renderChunkTranslations(
     const renderScript = (pageBase: string) =>
       renderStartupScript({
         base: pageBase,
-        entry: getChunkKey(entry),
+        entry: getEntryKey(entry),
         hashes,
         tokens,
         ...(maps ? { maps } : { files: [...assignment.files.keys()] }),
@@ -255,7 +336,7 @@ export function renderChunkTranslations(
       translations: Object.fromEntries(
         Object.entries(hashes).map(([locale, hash]) => [
           locale,
-          getFileName(getChunkKey(entry), locale, hash),
+          getFileName(getEntryKey(entry), locale, hash),
         ])
       ),
       startupScript: renderScript(base),
@@ -359,7 +440,10 @@ export function writeChunkTranslations(
       translations: getUnsplitTranslations(table, build),
     },
     build.naming === 'map'
-      ? { key: path.posix.join(assetsDir, TRANSLATIONS_MAP_KEY) }
+      ? {
+          key: path.posix.join(assetsDir, TRANSLATIONS_MAP_KEY),
+          files: path.posix.join(assetsDir, CONTENT_FILES_KEY),
+        }
       : undefined
   );
   for (const file of files) emitFile({ type: 'asset', ...file });

@@ -14,6 +14,10 @@ const messagesFile = process.env.CHECK_MESSAGES;
 // more from a copy with a changed translation.
 const translations = process.env.CHECK_TRANSLATIONS ?? resolve('src/_gt');
 
+// scripts/check.mjs also builds the app with a change to its JavaScript
+// alone, in a module every route imports, which renames their chunks.
+const revision = process.env.CHECK_REVISION;
+
 export default defineConfig({
   plugins: [
     gtCompiler({
@@ -22,6 +26,13 @@ export default defineConfig({
     }),
     react(),
     messagesFile !== undefined && collectMessages(messagesFile),
+    revision !== undefined && {
+      name: 'check-revision',
+      transform: (code: string, id: string) =>
+        id.endsWith('/src/shared/Badge.tsx')
+          ? `${code}\nwindow.__revision = ${JSON.stringify(revision)};`
+          : null,
+    },
   ],
   resolve: {
     // pnpm installs gt-react's React peer into the workspace package, so its

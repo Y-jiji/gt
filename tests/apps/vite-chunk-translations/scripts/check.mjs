@@ -40,9 +40,10 @@ const SOURCE_LOADS = 9;
 /**
  * `translations` is the directory the build and the app's own loader read
  * the translation files from, when not the app's, `entry` the page to build,
- * when not index.html, and `base` Vite's, when not `/`.
+ * when not index.html, `base` Vite's, when not `/`, and `revision` a change
+ * to the JavaScript of a module every route imports.
  */
-function build(outDir, chunkTranslations, translations, entry, base) {
+function build(outDir, chunkTranslations, translations, entry, base, revision) {
   const start = Date.now();
   execFileSync('pnpm', ['exec', 'vite', 'build', '--logLevel', 'error'], {
     cwd: root,
@@ -56,6 +57,7 @@ function build(outDir, chunkTranslations, translations, entry, base) {
       ...(translations && { CHECK_TRANSLATIONS: translations }),
       ...(entry && { CHECK_ENTRY: entry }),
       ...(base && { CHECK_BASE: base }),
+      ...(revision && { CHECK_REVISION: revision }),
     },
   });
   return Date.now() - start;
@@ -91,6 +93,48 @@ function serve(directory) {
     server.listen(0, '127.0.0.1', () =>
       resolve({
         url: `http://127.0.0.1:${server.address().port}`,
+        close: () => server.close(),
+      })
+    )
+  );
+}
+
+/**
+ * Serves a build as a static host does that caches hashed assets for good,
+ * and deploys another build at the same address. Lists the paths it is
+ * asked for, which are those a browser does not have.
+ */
+function host(directory) {
+  const requests = [];
+  const server = createServer((request, response) => {
+    const { pathname } = new URL(request.url, 'http://localhost');
+    const file = join(
+      directory,
+      normalize(pathname === '/' ? '/index.html' : pathname)
+    );
+    if (
+      !file.startsWith(directory) ||
+      !statSync(file, { throwIfNoEntry: false })?.isFile()
+    ) {
+      response.writeHead(404).end('Not found');
+      return;
+    }
+    requests.push(pathname);
+    response.writeHead(200, {
+      'Content-Type': TYPES[extname(file)] ?? 'application/octet-stream',
+      'Cache-Control': pathname.startsWith('/assets/')
+        ? 'public, max-age=31536000, immutable'
+        : 'no-cache',
+    });
+    createReadStream(file).pipe(response);
+  });
+  return new Promise((resolve) =>
+    server.listen(0, '127.0.0.1', () =>
+      resolve({
+        url: `http://127.0.0.1:${server.address().port}`,
+        /** The paths asked for since the last call. */
+        asked: () => requests.splice(0),
+        deploy: (next) => (directory = next),
         close: () => server.close(),
       })
     )
@@ -254,7 +298,8 @@ async function checkRoute(app, locale, route, added, name = locale) {
   check(`${name}: exact text on ${route}`, !wrong.length, wrong.join('; '));
 }
 
-const isTranslations = ({ path }) => /\.[0-9a-f]{8}\.json$/.test(path);
+const isTranslationsFile = (path) => /\.[0-9a-f]{8,}\.json$/.test(path);
+const isTranslations = ({ path }) => isTranslationsFile(path);
 const isCatalog = ({ path }) => /\/(fr|de)-[\w-]+\.js$/.test(path);
 
 /** Visits every route and the dialog, checking text, requests and flashes. */
@@ -281,16 +326,19 @@ async function checkLocale(url, locale, manifest) {
     const requested = app.requests
       .filter(isTranslations)
       .map(({ path }) => path.slice(1));
+    // Files that hold the same are one file, in a build that names them by their hash
     const expected =
       locale === manifest.defaultLocale
         ? []
         : [
-            ...Object.values(manifest.entries).map(
-              ({ translations }) => translations[locale]
-            ),
-            ...Object.values(manifest.files).map((files) => files[locale]),
-            manifest.unsplit[locale],
-            ...(manifest.maps ? [manifest.maps[locale]] : []),
+            ...new Set([
+              ...Object.values(manifest.entries).map(
+                ({ translations }) => translations[locale]
+              ),
+              ...Object.values(manifest.files).map((files) => files[locale]),
+              manifest.unsplit[locale],
+              ...(manifest.maps ? [manifest.maps[locale]] : []),
+            ]),
           ];
     check(
       `${locale}: requests exactly its own translation files, once each`,
@@ -317,7 +365,21 @@ async function checkLocale(url, locale, manifest) {
         `${unsplitDelay.toFixed(1)} ms after it`
       );
 
-      // Each other file against the chunk it is named after
+      // Each other file against the chunk it is of, which the manifest says
+      const chunkOfFile = (path) =>
+        [
+          ...Object.entries(manifest.entries).map(
+            ([entry, { translations }]) => [`/${entry}`, translations[locale]]
+          ),
+          ...Object.entries(manifest.files).map(([key, files]) => [
+            `/${key}.js`,
+            files[locale],
+          ]),
+        ].find(
+          ([chunk, file]) =>
+            `/${file}` === path &&
+            app.requests.some((request) => request.path === chunk)
+        )[0];
       const late = [];
       const waiting = [];
       const mapArrived = app.responses.find(
@@ -334,11 +396,11 @@ async function checkLocale(url, locale, manifest) {
           );
           continue;
         }
-        const chunk = path.replace(/\.[\w-]+\.[0-9a-f]{8}\.json$/, '.js');
+        const chunk = chunkOfFile(path);
         const loaded = app.requests.find((request) => request.path === chunk);
         const delta = (time - loaded.time) * 1000;
         console.log(
-          `      ${path.split('/').pop()} started ${delta.toFixed(1)} ms after its chunk`
+          `      ${path.split('/').pop()} started ${delta.toFixed(1)} ms after its chunk ${chunk.split('/').pop()}`
         );
         if (manifest.entries[chunk.slice(1)]) continue;
         // A file is named by the map, so a chunk imported before the map
@@ -666,7 +728,7 @@ if (manifest.maps) {
 
   // The entry's file is slow, so nothing can have waited for it
   const app = await open(on.url, 'fr', (page) =>
-    page.route('**/index-*.fr.*.json', async (route) => {
+    page.route(`**${entryOf('fr')}`, async (route) => {
       await new Promise((resolve) => setTimeout(resolve, 400));
       await route.continue();
     })
@@ -832,8 +894,8 @@ async function checkFailure(name, pattern, mode, route, expectations) {
   await app.close();
 }
 
-const entryFile = '**/index-*.fr.*.json';
-const ordersFile = '**/Orders-*.fr.*.json';
+const entryFile = `**${entryOf('fr')}`;
+const ordersFile = `**${fileOf('Orders', 'fr')}`;
 // The route's own text is the source; the shell and the shared chunk loaded
 const ROUTE_FAILED = {
   title: 'WORKSPACE OVERVIEW',
@@ -842,15 +904,25 @@ const ROUTE_FAILED = {
   glossary: GLOSSARY.toUpperCase(),
 };
 // The entry's file also says which files each import needs, so without it
-// every chunk renders the source; the unsplit file needs nothing of it
-const ENTRY_FAILED = {
-  frame: SHELL.frame,
-  title: SHELL.title,
-  footer: SHELL.footer,
-  heading: ROUTES.home.heading,
-  msg: 'MAINTENANCE STARTS TONIGHT',
-};
-const reportsFile = '**/Reports-*.fr.*.json';
+// every chunk renders the source; the unsplit file needs nothing of it. In a
+// build with maps the map says that, so only the entry's own message, which
+// the application root also reads, renders the source.
+const ENTRY_FAILED = manifest.maps
+  ? {
+      frame: SHELL.frame,
+      title: 'WORKSPACE OVERVIEW',
+      footer: `${SHELL.frame}: ALL SYSTEMS OPERATIONAL (OPEN, CLOSED)`,
+      heading: 'WELCOME HOME',
+      msg: 'MAINTENANCE STARTS TONIGHT',
+    }
+  : {
+      frame: SHELL.frame,
+      title: SHELL.title,
+      footer: SHELL.footer,
+      heading: ROUTES.home.heading,
+      msg: 'MAINTENANCE STARTS TONIGHT',
+    };
+const reportsFile = `**${fileOf('Reports', 'fr')}`;
 // What the route's chunks read from its file is the source, the small
 // shared chunk's messages included; the larger shared chunk has its own file
 const REPORTS_FAILED = {
@@ -926,8 +998,8 @@ await checkFailure(
 );
 if (manifest.maps) {
   const mapFile = '**/gt-map.fr.*.json';
-  // No file of a chunk can be found, the root's included; the entry's needs
-  // no map
+  // No file of a chunk can be found, the root's included, and no import
+  // knows which files it needs; the entry's needs no map
   const MAP_FAILED = {
     frame: 'ACME WORKSPACE',
     title: 'Workspace overview',
@@ -977,6 +1049,108 @@ if (manifest.maps) {
   relative.close();
 }
 
+// ===== What a change to JavaScript alone renames ===== //
+// The same build with one statement added to a module every route imports.
+// The bundler names a chunk by its content and by the names of the chunks it
+// imports, so the change renames every chunk on the way up to the entry, and
+// no translation changes.
+// - With one token per locale a file's name follows from its chunk's, so the
+//   translation files are renamed with their chunks and a returning visitor
+//   requests them again.
+// - With maps no file that holds translations is named after a chunk: only
+//   the locale's map changes, and a returning visitor requests only that.
+const redeploy = await (async () => {
+  const changed = join(root, '.check', `${NAMING}-revision`);
+  build(changed, true, undefined, undefined, undefined, 'next');
+  const [before, after] = [read(ON), read(changed)];
+  const { renamed } = compare(before, after);
+  const chunks = renamed.filter((file) => file.endsWith('.js'));
+  const files = renamed.filter(isTranslationsFile);
+  const held = new Set(before.values());
+  const unchanged = files.filter((file) => held.has(after.get(file)));
+  const next = JSON.parse(after.get('assets/gt-chunk-translations.json'));
+  check(
+    'a change to JavaScript alone renames the chunks on the way up to the entry',
+    ['Badge', 'Home', 'Orders', 'Reports', 'Settings', 'App', 'index'].every(
+      (name) => chunks.some((file) => file.startsWith(`assets/${name}-`))
+    ),
+    `${chunks.length} of ${[...after.keys()].filter((file) => file.endsWith('.js')).length} chunks`
+  );
+  if (manifest.maps) {
+    check(
+      'a change to JavaScript alone renames no file that holds translations, only the maps',
+      files.sort().join() === Object.values(next.maps).sort().join(),
+      files.join(', ')
+    );
+  } else {
+    // Documented for this naming: a renamed chunk renames its file
+    const expected = Object.entries(next.files)
+      .filter(([key]) => chunks.includes(`${key}.js`))
+      .flatMap(([, byLocale]) => Object.values(byLocale));
+    check(
+      'a change to JavaScript alone renames the translation files of the renamed chunks',
+      expected.length > 0 && expected.every((file) => files.includes(file)),
+      `${files.length} renamed, ${unchanged.length} of them hold what they held`
+    );
+  }
+
+  // A visitor who has the first build, at a host that caches assets for good
+  const deploys = await host(ON);
+  const app = await open(deploys.url, 'fr');
+  const visit = async (name) => {
+    await app.goto();
+    await checkRoute(app, 'fr', 'home', 0, name);
+    await app.navigate('orders');
+    await checkRoute(app, 'fr', 'orders', 0, name);
+    await app.navigate('reports');
+    await checkRoute(app, 'fr', 'reports', 0, name);
+    await app.page.goto('about:blank');
+    return deploys.asked();
+  };
+  const first = await visit('a first visit, fr');
+  deploys.deploy(changed);
+  const again = await visit('a visit after only JavaScript changed, fr');
+  await app.close();
+  deploys.close();
+  const requested = again.filter(isTranslationsFile);
+  check(
+    'a returning visitor requests the chunks that were renamed, and no other',
+    again.filter((path) => path.endsWith('.js')).length > 0 &&
+      again
+        .filter((path) => path.endsWith('.js'))
+        .every((path) => chunks.includes(path.slice(1))),
+    again.filter((path) => path.endsWith('.js')).join(', ')
+  );
+  if (manifest.maps) {
+    check(
+      'a returning visitor requests no translation file again but the map',
+      requested.join() === `/${next.maps.fr}`,
+      requested.join(', ')
+    );
+  } else {
+    // Documented for this naming: every file but the unsplit one, whose name
+    // holds no chunk's and no token
+    const visited = first.filter(isTranslationsFile);
+    check(
+      'a returning visitor requests the translation files of the renamed chunks again',
+      requested.length === visited.length - 1 &&
+        !requested.includes(`/${next.unsplit.fr}`),
+      `${requested.length} of ${visited.length}`
+    );
+  }
+  const bytes = (paths) =>
+    paths.reduce((sum, path) => sum + statSync(join(changed, path)).size, 0);
+  return {
+    chunks,
+    total: [...after.keys()].filter((file) => file.endsWith('.js')).length,
+    files,
+    unchanged,
+    visited: first.filter(isTranslationsFile).length,
+    requested,
+    bytes: bytes(requested),
+  };
+})();
+
 await browser.close();
 on.close();
 off.close();
@@ -985,13 +1159,14 @@ off.close();
 // The same build with one translation of one locale changed: a message of
 // the Orders route, in fr. The app's own loadTranslations imports the same
 // files the compiler reads, as an app's does.
-const read = (directory, page = 'index.html') =>
-  new Map(
+function read(directory, page = 'index.html') {
+  return new Map(
     [page, ...assets(directory).map((file) => `assets/${file}`)].map((file) => [
       file,
       readFileSync(join(directory, file), 'utf8'),
     ])
   );
+}
 /** What differs between two builds: the files only the second has, and those with other content. */
 function compare(before, after) {
   const renamed = [...after.keys()].filter((file) => !before.has(file));
@@ -1024,11 +1199,19 @@ const stability = (() => {
     touched.join(', ')
   );
   if (manifest.maps) {
-    const expected = [/\/Orders-[\w-]+\.fr\./, /\/gt-map\.fr\./];
+    const next = JSON.parse(
+      readFileSync(
+        join(changed, 'assets', 'gt-chunk-translations.json'),
+        'utf8'
+      )
+    );
+    const orders = Object.keys(next.files).find((key) =>
+      key.startsWith('assets/Orders-')
+    );
     check(
       "a changed translation renames only its file and the locale's map",
-      renamed.length === expected.length &&
-        expected.every((pattern) => renamed.some((file) => pattern.test(file))),
+      renamed.sort().join() ===
+        [next.files[orders].fr, next.maps.fr].sort().join(),
       renamed.join(', ')
     );
   }
@@ -1090,7 +1273,7 @@ const startupOff = startup.off.map((path) => join(OFF, path));
 const htmlOn = join(ON, 'index.html');
 const htmlOff = join(OFF, 'index.html');
 
-const files = assets(ON).filter((file) => /\.[0-9a-f]{8}\.json$/.test(file));
+const files = assets(ON).filter(isTranslationsFile);
 const mapFile = manifest.maps && join(ON, manifest.maps.fr);
 const frFiles = files.filter(
   (file) => file.includes('.fr.') && !file.startsWith('gt-map.')
@@ -1098,6 +1281,23 @@ const frFiles = files.filter(
 const entryNames = Object.values(manifest.entries).map(({ translations }) =>
   translations.fr.split('/').pop()
 );
+// What a file is of, which its name does not say in a build with maps
+const owners = new Map();
+for (const [owner, file] of [
+  ...Object.entries(manifest.entries).map(([entry, { translations }]) => [
+    entry.replace(/\.js$/, ''),
+    translations.fr,
+  ]),
+  ...Object.entries(manifest.files).map(([key, byLocale]) => [
+    key,
+    byLocale.fr,
+  ]),
+]) {
+  if (file)
+    owners.set(file, [...(owners.get(file) ?? []), owner.split('/').pop()]);
+}
+const ownerOf = (file) =>
+  owners.get(`assets/${file}`)?.join(' + ') ?? file.split('.')[0];
 const hashesOf = (file) => {
   const content = JSON.parse(readFileSync(join(ON, 'assets', file), 'utf8'));
   return Object.keys(entryNames.includes(file) ? content.t : content);
@@ -1111,11 +1311,13 @@ const repeated = [...uses.values()].filter((count) => count > 1).length;
 console.log(`
 Naming: ${NAMING}${mapFile ? `, the fr map is ${size(mapFile)} B (${gzip(mapFile)} B gzip)` : ''}
 A changed fr translation renames ${stability.renamed.length} files: ${stability.renamed.map((file) => file.split('/').pop()).join(', ')}
+A change to JavaScript alone renames ${redeploy.chunks.length} of ${redeploy.total} chunks and ${redeploy.files.length} of ${files.length} translation files, ${redeploy.unchanged.length} of which hold what they held
+A returning fr visitor requests ${redeploy.requested.length} of ${redeploy.visited} translation files again (${redeploy.bytes} B): ${redeploy.requested.map((path) => path.split('/').pop()).join(', ')}
 Build: ${offTime} ms without, ${onTime} ms with chunk translations
 Startup JavaScript: ${total(startupOff, size)} B (${total(startupOff, gzip)} B gzip) without, ${total(startupOn, size)} B (${total(startupOn, gzip)} B gzip) with
 index.html: ${size(htmlOff)} B (${gzip(htmlOff)} B gzip) without, ${size(htmlOn)} B (${gzip(htmlOn)} B gzip) with
 Translation files: ${files.length} for ${manifest.locales.length} locales and ${assets(ON).filter((file) => file.endsWith('.js')).length} chunks
-Messages per fr file: ${frFiles.map((file) => `${file.split('.')[0]} ${hashesOf(file).length} (${gzip(join(ON, 'assets', file))} B gzip)`).join(', ')}
+Messages per fr file: ${frFiles.map((file) => `${ownerOf(file)} ${hashesOf(file).length} (${gzip(join(ON, 'assets', file))} B gzip)`).join(', ')}
 Messages in more than one fr file: ${repeated} of ${uses.size}`);
 
 if (failed) {
