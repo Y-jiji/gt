@@ -63,6 +63,9 @@ export function initializeState(
     devHotReload: _b,
     experimentalChunkTranslations: _g,
     experimentalChunkTranslationsNaming: _h,
+    experimentalChunkTranslationsSplit: _i,
+    experimentalChunkTranslationsRequestCost: _j,
+    experimentalChunkTranslationsPrevious: _k,
     ...restOptions
   } = options;
 

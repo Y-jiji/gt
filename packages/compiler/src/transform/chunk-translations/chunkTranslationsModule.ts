@@ -123,7 +123,11 @@ export function finishChunkTranslationsFile(
   }
   if (!file.imports.size) return false;
   program.body.unshift(
-    createEntryImport(file.imports, state.settings.chunkTranslations?.naming)
+    createEntryImport(
+      file.imports,
+      state.settings.chunkTranslations?.naming,
+      state.settings.chunkTranslations?.regions !== undefined
+    )
   );
   return true;
 }
@@ -172,13 +176,14 @@ function getImportedName(specifier: t.ImportSpecifier): string {
 
 function createEntryImport(
   imports: Iterable<ChunkTranslationsImport>,
-  naming: ChunkTranslationsNaming = defaultChunkTranslationsNaming
+  naming: ChunkTranslationsNaming = defaultChunkTranslationsNaming,
+  splitsByModule = false
 ): t.ImportDeclaration {
   return t.importDeclaration(
     [...imports].map((kind) =>
       t.importSpecifier(
         t.identifier(CHUNK_TRANSLATIONS_IMPORTS[kind].local),
-        t.identifier(getEntryExport(kind, naming))
+        t.identifier(getEntryExport(kind, naming, splitsByModule))
       )
     ),
     t.stringLiteral(CHUNK_TRANSLATIONS_SOURCE)
@@ -195,7 +200,8 @@ function createEntryImport(
 export function wrapDynamicImports(
   code: string,
   id: string,
-  naming: ChunkTranslationsNaming = defaultChunkTranslationsNaming
+  naming: ChunkTranslationsNaming = defaultChunkTranslationsNaming,
+  splitsByModule = false
 ): { code: string; map: unknown } | undefined {
   const { local } = CHUNK_TRANSLATIONS_IMPORTS.load;
   if (!code.includes('import(') || code.includes(local)) return undefined;
@@ -237,7 +243,7 @@ export function wrapDynamicImports(
     },
   });
   if (!wrapped) return undefined;
-  ast.program.body.unshift(createEntryImport(['load'], naming));
+  ast.program.body.unshift(createEntryImport(['load'], naming, splitsByModule));
   const output = generate(
     ast,
     { retainLines: true, sourceMaps: true, sourceFileName: id },
