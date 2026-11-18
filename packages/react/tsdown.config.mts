@@ -26,6 +26,11 @@ const contextDeps = {
   alwaysBundle: [/^@generaltranslation\/format\//, /^generaltranslation\//],
 };
 
+// The app's bundle already holds what gt-i18n imports, so nothing is bundled twice.
+const chunkTranslationsDeps = {
+  neverBundle: [...contextDeps.neverBundle, /^generaltranslation\//],
+};
+
 const entries = [
   'src/index.rsc.ts',
   'src/index.client.ts',
@@ -37,6 +42,7 @@ const entries = [
   'src/unstable.ts',
   'src/unstable.rsc.ts',
   'src/vite.ts',
+  'src/chunk-translations.ts',
 ];
 
 // src/index.types.ts only backs the exports map's "types" conditions; its
@@ -49,9 +55,12 @@ export default defineConfig(
     entries.flatMap((entry, index) => {
       // Entries that share React context and singletons keep react-core and
       // gt-i18n external; unstable entries import them like the index entries.
-      const entryDeps = /^src\/(?:index|compat|unstable)\./.test(entry)
-        ? contextDeps
-        : deps;
+      const entryDeps =
+        entry === 'src/chunk-translations.ts'
+          ? chunkTranslationsDeps
+          : /^src\/(?:index|compat|unstable)\./.test(entry)
+            ? contextDeps
+            : deps;
       const [cjsConfig, esmConfig] = createTsdownConfig([entry], entryDeps);
 
       return [

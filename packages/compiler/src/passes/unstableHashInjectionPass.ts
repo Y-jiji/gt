@@ -3,6 +3,10 @@ import * as t from '@babel/types';
 import { isUnstableGTImportSource } from 'generaltranslation/internal';
 import { TransformState } from '../state/types';
 import { injectUnstableTaggedTemplateHash } from '../transform/injection/injectUnstableTaggedTemplateHash';
+import {
+  keepUnsplit,
+  recordChunkHash,
+} from '../transform/chunk-translations/chunkTranslationsModule';
 
 /**
  * Unstable hash injection pass — injects `$_hash` into statically analyzable
@@ -12,9 +16,15 @@ import { injectUnstableTaggedTemplateHash } from '../transform/injection/injectU
 export function unstableHashInjectionPass(
   state: TransformState
 ): TraverseOptions {
+  // A build with chunk translations splits t templates by chunk; m() renders
+  // a msg away from its call site, so its translation stays unsplit
+  const onHash = state.settings.chunkTranslations
+    ? (hash: string, isMsg: boolean) =>
+        isMsg ? keepUnsplit(hash, state) : recordChunkHash(hash, state)
+    : undefined;
   return {
     TaggedTemplateExpression(path) {
-      if (injectUnstableTaggedTemplateHash(path)) {
+      if (injectUnstableTaggedTemplateHash(path, onHash)) {
         state.statistics.unstableHashInjectionsCount += 1;
       }
     },

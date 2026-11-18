@@ -1,0 +1,382 @@
+import { createHash } from 'node:crypto';
+import path from 'node:path';
+import type { GTOutputFileConfig } from 'generaltranslation';
+import { createDiagnosticMessage } from 'generaltranslation/diagnostics';
+import {
+  loadTranslationFiles,
+  resolveTranslationFiles,
+  type TranslationsTable,
+} from './loadTranslationFiles';
+import {
+  assignTranslationsByChunk,
+  findChunkHashes,
+  getChunkKey,
+  renderImportedFiles,
+  type AssignedChunk,
+  type TranslationAssignment,
+} from './assignTranslations';
+import {
+  CHUNK_TRANSLATIONS_MANIFEST,
+  type ChunkTranslations,
+} from './resolveChunkTranslations';
+import { renderStartupScript } from './startupScript';
+import {
+  getUnsplitTranslations,
+  UNSPLIT_TRANSLATIONS_KEY,
+} from './unsplitTranslations';
+
+/** A file of the bundle, as Rollup, Rolldown and Vite pass it to a plugin. */
+type BundleFile = {
+  type: string;
+  code?: string;
+  /** The modules the bundler put into a chunk */
+  moduleIds?: string[];
+} & Partial<Omit<AssignedChunk, 'hashes'>>;
+
+/**
+ * What a server that writes its own HTML or preload links reads: which file
+ * holds the translations of each chunk in each locale.
+ */
+export type ChunkTranslationsManifest = {
+  defaultLocale: string;
+  /** The locales the build wrote files for */
+  locales: string[];
+  /** By the file of each entry chunk */
+  entries: Record<
+    string,
+    {
+      /** The entry's translations file, by locale */
+      translations: Record<string, string>;
+      /** What the page runs before its modules, which `index.html` holds already */
+      startupScript: string;
+    }
+  >;
+  /** Every other translations file, by its key and locale */
+  files: Record<string, Record<string, string>>;
+  /**
+   * The keys to pass gt-react's `loadChunkTranslations()` before a page that
+   * started from an entry loads a dynamically imported chunk, by chunk file
+   */
+  imports: Record<string, string[]>;
+  /**
+   * The file of the translations no chunk's file holds, by locale, which a
+   * page requests with its entry's file. Left out when the build has none.
+   */
+  unsplit?: Record<string, string>;
+  /**
+   * The map of each locale, in a build that names each file by its own hash:
+   * the hash in the name of every file under `files`, by its key.
+   */
+  maps?: Record<string, string>;
+};
+
+/** The key of a locale's map, inside the directory of the build's assets. */
+const TRANSLATIONS_MAP_KEY = 'gt-map';
+
+export const createMissingTranslationsWarning = (locales: string[]) =>
+  createDiagnosticMessage({
+    source: '@generaltranslation/compiler',
+    severity: 'Warning',
+    whatHappened: `Wrote no chunk translations for ${locales.map((locale) => `"${locale}"`).join(', ')}`,
+    why: 'files.gt.output has no translations file for them',
+    reassurance: 'Those locales render the source text',
+    fix: 'Add their translation files and build again',
+  });
+
+export const createBundledCatalogsWarning = (files: string[]) =>
+  createDiagnosticMessage({
+    source: '@generaltranslation/compiler',
+    severity: 'Warning',
+    whatHappened: `The build still bundles ${files.join(', ')}`,
+    why: 'the app imports them, and a build with chunk translations takes only a loadTranslations function out of the object initializeGTSPA is called with',
+    reassurance:
+      'Nothing loads them, but a changed translation renames the chunk that names them',
+    fix: 'Pass loadTranslations to initializeGTSPA as a function or the name of one, in the object it is called with',
+  });
+
+function getFileHash(source: string): string {
+  return createHash('sha256').update(source).digest('hex').slice(0, 8);
+}
+
+/** The translations of `hashes` that `locale` has, in their order. */
+function pickTranslations(
+  translations: Record<string, unknown>,
+  hashes: string[]
+): Record<string, unknown> {
+  const picked: Record<string, unknown> = {};
+  for (const hash of hashes) {
+    if (
+      Object.prototype.hasOwnProperty.call(translations, hash) &&
+      translations[hash] != null
+    ) {
+      picked[hash] = translations[hash];
+    }
+  }
+  return picked;
+}
+
+/**
+ * The files of a build, from which messages go into which file and the
+ * translations of its locales: each file per locale, and the manifest.
+ *
+ * - An entry's file is named by the entry chunk's key, the locale and the
+ *   hash of its own content, which the page's startup script holds. It also
+ *   holds which files each dynamic import needs (see renderImportedFiles).
+ * - Every other file is named by its key, the locale and the locale's token:
+ *   one hash of all of them. The startup script holds that token too, so a
+ *   file's URL follows from its chunk's, and the page can request the files
+ *   of the chunks it preloads before anything else has arrived. A file is
+ *   written for every locale, also when it holds nothing.
+ *
+ * No chunk's code changes when a translation does. A locale's files, and the
+ * HTML, do: a change to any of them gives all of them a new name, so each
+ * name stays one content for good and can be cached as immutable.
+ *
+ * With `maps`, every other file is named by the hash of its own content
+ * instead, and written only when it holds something. One more file per
+ * locale, the map, holds the hash of each, and the startup script holds the
+ * hash in the map's name. A change then renames only the files it changes
+ * and the locale's map, and the files of chunks are requested once the map
+ * has arrived.
+ */
+export function renderChunkTranslations(
+  assignment: TranslationAssignment,
+  build: Pick<ChunkTranslations, 'defaultLocale' | 'locales'>,
+  table: TranslationsTable,
+  base: string,
+  unsplit?: {
+    /** The key of the unsplit files */
+    key: string;
+    /** The translations of each locale that has such a file, see getUnsplitTranslations */
+    translations: Record<string, Record<string, unknown>>;
+  },
+  /** The key of the maps, in a build that names each file by its own hash */
+  maps?: { key: string }
+): {
+  files: { fileName: string; source: string }[];
+  manifest: ChunkTranslationsManifest;
+  /** The unsplit file of each locale that has one */
+  unsplit: { locale: string; count: number; bytes: number }[];
+  /** Writes the startup script of each entry chunk, by its file, for a page that finds the build's files at a base */
+  startupScripts: Map<string, (base: string) => string>;
+} {
+  const locales = build.locales.filter((locale) => table[locale]);
+  const files: { fileName: string; source: string }[] = [];
+  const manifest: ChunkTranslationsManifest = {
+    defaultLocale: build.defaultLocale,
+    locales,
+    entries: {},
+    files: {},
+    imports: Object.fromEntries(assignment.imports),
+  };
+  const entryHashes = new Map<string, Record<string, string>>();
+  const unsplitHashes: Record<string, string> = {};
+  const unsplitFiles: { locale: string; count: number; bytes: number }[] = [];
+  for (const [locale, translations] of Object.entries(
+    unsplit?.translations ?? {}
+  )) {
+    const source = JSON.stringify(translations);
+    const hash = getFileHash(source);
+    const fileName = getFileName(unsplit!.key, locale, hash);
+    files.push({ fileName, source });
+    unsplitHashes[locale] = hash;
+    (manifest.unsplit ??= {})[locale] = fileName;
+    unsplitFiles.push({
+      locale,
+      count: Object.keys(translations).length,
+      bytes: Buffer.byteLength(source),
+    });
+  }
+
+  const imported = renderImportedFiles(assignment.imports);
+  const tokens: Record<string, string> = {};
+  for (const locale of locales) {
+    const sources = [...assignment.files].map(
+      ([key, hashes]) =>
+        [key, JSON.stringify(pickTranslations(table[locale], hashes))] as const
+    );
+    if (maps) {
+      const hashes: Record<string, string> = {};
+      for (const [key, source] of sources) {
+        if (source === '{}') continue;
+        hashes[key] = getFileHash(source);
+        const fileName = getFileName(key, locale, hashes[key]);
+        files.push({ fileName, source });
+        (manifest.files[key] ??= {})[locale] = fileName;
+      }
+      const map = JSON.stringify(hashes);
+      tokens[locale] = getFileHash(map);
+      const fileName = getFileName(maps.key, locale, tokens[locale]);
+      files.push({ fileName, source: map });
+      (manifest.maps ??= {})[locale] = fileName;
+    } else {
+      const token = getFileHash(JSON.stringify(sources));
+      tokens[locale] = token;
+      for (const [key, source] of sources) {
+        const fileName = getFileName(key, locale, token);
+        files.push({ fileName, source });
+        (manifest.files[key] ??= {})[locale] = fileName;
+      }
+    }
+    for (const [entry, hashes] of assignment.entries) {
+      const source = JSON.stringify({
+        t: pickTranslations(table[locale], hashes),
+        ...(imported && { i: imported }),
+      });
+      const hash = getFileHash(source);
+      files.push({
+        fileName: getFileName(getChunkKey(entry), locale, hash),
+        source,
+      });
+      let byLocale = entryHashes.get(entry);
+      if (!byLocale) entryHashes.set(entry, (byLocale = {}));
+      byLocale[locale] = hash;
+    }
+  }
+
+  const startupScripts = new Map<string, (base: string) => string>();
+  for (const entry of assignment.entries.keys()) {
+    const hashes = entryHashes.get(entry) ?? {};
+    const renderScript = (pageBase: string) =>
+      renderStartupScript({
+        base: pageBase,
+        entry: getChunkKey(entry),
+        hashes,
+        tokens,
+        ...(maps ? { maps } : { files: [...assignment.files.keys()] }),
+        locales: [build.defaultLocale, ...build.locales],
+        ...(unsplit &&
+          unsplitFiles.length && {
+            unsplit: { key: unsplit.key, hashes: unsplitHashes },
+          }),
+      });
+    startupScripts.set(entry, renderScript);
+    manifest.entries[entry] = {
+      translations: Object.fromEntries(
+        Object.entries(hashes).map(([locale, hash]) => [
+          locale,
+          getFileName(getChunkKey(entry), locale, hash),
+        ])
+      ),
+      startupScript: renderScript(base),
+    };
+  }
+  return { files, manifest, unsplit: unsplitFiles, startupScripts };
+}
+
+function findBundledCatalogs(
+  chunks: BundleFile[],
+  gtFiles: GTOutputFileConfig,
+  build: Pick<ChunkTranslations, 'locales'>
+): string[] {
+  const catalogs = new Map(
+    resolveTranslationFiles(gtFiles.output ?? '', build.locales).map(
+      ({ filePath }) => [path.resolve(filePath), filePath]
+    )
+  );
+  const bundled = new Set<string>();
+  for (const chunk of chunks) {
+    for (const id of chunk.moduleIds ?? []) {
+      const catalog = catalogs.get(path.resolve(id.split('?')[0]));
+      if (catalog) bundled.add(catalog);
+    }
+  }
+  return [...bundled].map((file) => path.relative(process.cwd(), file)).sort();
+}
+
+/** The translations file of each of the build's locales that has one. */
+export function loadChunkTranslationsTable(
+  gtFiles: GTOutputFileConfig,
+  build: Pick<ChunkTranslations, 'locales'>
+): TranslationsTable {
+  return gtFiles.output
+    ? loadTranslationFiles(gtFiles.output, build.locales)
+    : {};
+}
+
+// gt-react's getFileUrl() reads files by the same name
+function getFileName(key: string, locale: string, hash: string): string {
+  return `${key}.${locale}.${hash}.json`;
+}
+
+/**
+ * Called once the bundler has written its chunks: emits the translation
+ * files and the manifest. Returns what writes the startup script of each
+ * entry chunk, by its file, the locales without a translations file, the
+ * unsplit files it wrote, and the chunks whose dynamic import needs a file.
+ */
+export function writeChunkTranslations(
+  bundle: Record<string, BundleFile>,
+  build: ChunkTranslations,
+  {
+    gtFiles,
+    base,
+    assetsDir,
+    emitFile,
+  }: {
+    gtFiles: GTOutputFileConfig;
+    /** The URL the build's files are served from */
+    base: string;
+    /** Where the manifest goes, inside the output directory */
+    assetsDir: string;
+    emitFile: (file: {
+      type: 'asset';
+      fileName: string;
+      source: string;
+    }) => unknown;
+  }
+): {
+  startupScripts: Map<string, (base: string) => string>;
+  missingLocales: string[];
+  unsplit: { locale: string; count: number; bytes: number }[];
+  imported: Set<string>;
+  /** The translation files at `files.gt.output` that are modules of the build */
+  bundledCatalogs: string[];
+} {
+  const chunks = Object.values(bundle).filter(
+    (
+      file
+    ): file is BundleFile & Omit<AssignedChunk, 'hashes'> & { code: string } =>
+      file.type === 'chunk' && typeof file.code === 'string'
+  );
+  const table = loadChunkTranslationsTable(gtFiles, build);
+  const assignment = assignTranslationsByChunk(
+    chunks.map(({ fileName, code, imports, dynamicImports, isEntry }) => ({
+      fileName,
+      hashes: findChunkHashes(code, build.hashes),
+      imports,
+      dynamicImports,
+      isEntry,
+    }))
+  );
+  const { files, manifest, unsplit, startupScripts } = renderChunkTranslations(
+    assignment,
+    build,
+    table,
+    base,
+    {
+      key: path.posix.join(assetsDir, UNSPLIT_TRANSLATIONS_KEY),
+      translations: getUnsplitTranslations(table, build),
+    },
+    build.naming === 'map'
+      ? { key: path.posix.join(assetsDir, TRANSLATIONS_MAP_KEY) }
+      : undefined
+  );
+  for (const file of files) emitFile({ type: 'asset', ...file });
+  emitFile({
+    type: 'asset',
+    fileName: path.posix.join(assetsDir, CHUNK_TRANSLATIONS_MANIFEST),
+    source: JSON.stringify(manifest, null, 2),
+  });
+  return {
+    startupScripts,
+    missingLocales: build.locales.filter((locale) => !table[locale]),
+    unsplit,
+    imported: new Set(
+      [...assignment.imports]
+        .filter(([, keys]) => keys.length)
+        .map(([target]) => target)
+    ),
+    bundledCatalogs: findBundledCatalogs(chunks, gtFiles, build),
+  };
+}
