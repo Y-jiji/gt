@@ -138,10 +138,7 @@ export type ChunkTranslationsState = {
   r?: Record<string, Promise<boolean> | undefined>;
 };
 
-type InitializeConfig = {
-  loadTranslations?: unknown;
-  cacheExpiryTime?: number | null;
-};
+type InitializeConfig = { loadTranslations?: unknown };
 
 function getState(): ChunkTranslationsState {
   const scope = globalThis as {
@@ -280,8 +277,8 @@ export function initializeChunkTranslations<C extends InitializeConfig>(
 
 /**
  * Starts gt-react with a cache that loads the locale with what has arrived so
- * far, and keeps it for good: the files a build wrote do not change. The
- * condition store exists once `initialize` returns.
+ * far; `initializeGTSPA()` keeps it for good. The condition store exists once
+ * `initialize` returns.
  */
 function initializeCache<C extends InitializeConfig>(
   initialize: (config: C) => Promise<void>,
@@ -290,7 +287,6 @@ function initializeCache<C extends InitializeConfig>(
 ): Promise<void> {
   return initialize({
     ...config,
-    cacheExpiryTime: null,
     loadTranslations: (locale: string) =>
       Promise.resolve(takeArrived(state, locale)),
   }).then(() => {
