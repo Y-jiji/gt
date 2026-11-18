@@ -7,3 +7,10 @@ import { t } from 'gt-react/unstable';
 
 export const statusHeading = t`Order status`;
 export const STATUS_LABELS = [t`Pending`, t`Shipped`, t`Delivered`];
+
+// Messages with a value, which a build that precomputes messages declares in
+// a function at module scope. The first is read as this module is evaluated;
+// nothing imports the second, so the bundler drops it, and its message with
+// it: no translations file may hold it.
+export const statusOwner = t`Managed by ${{ name: 'Ada' }}`;
+export const archivedBy = (name: string) => t`Archived by ${{ name }}`;
