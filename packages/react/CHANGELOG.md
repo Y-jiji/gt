@@ -1,5 +1,59 @@
 # gt-react
 
+## 12.0.0-samsara.10
+
+### Major Changes
+
+- ac272be: `t()` from `@generaltranslation/react-core/pure` and `gt-react` now reports every call outside a client-rendered (SPA) app, not only calls made before GT has a locale: in development it throws, and in production it logs the error and renders the source with its variables. Before, in production it logged a promise to fall back and then threw "Cannot read GT runtime context", and calls after `<GTProvider>` mounted were not reported. `t` from `/unstable` reports the same error. In a server-rendered app, use `useGT()` in components, `getGT()` in loaders and server functions, or `msg()` with `m()` from `useMessages()` or `getMessages()`.
+- ac272be: `t()` is only available in client-rendered (SPA) apps, so only SPA code can import it:
+  - `gt-react` exports `t` only from its browser entry. Its server (Node, `worker`, `workerd`) and `react-server` entries no longer export it, so server-rendered code that imports `t` from `gt-react` fails when the app is built. TypeScript still sees `t`, since every condition except `react-server` shares one declaration file.
+  - `gt-tanstack-start` no longer exports `t`.
+  - `gt-react/macros`, which set a global `t`, is removed. Import `t` from `gt-react` in the files that use it. An app that wants the global can define it in its entry module:
+
+    ```ts
+    import { t as translate } from 'gt-react';
+
+    declare global {
+      var t: typeof translate;
+    }
+    globalThis.t = translate;
+    ```
+
+    The compiler and `gt translate` still recognize a global `` t`…` ``.
+
+  In a server-rendered app, client-side code included, replace `import { t } from 'gt-react'` or `import { t } from 'gt-tanstack-start'` with `useGT()` in components, `getGT()` in loaders and server functions, or `msg()` with `m()` from `useMessages()` or `getMessages()`.
+
+### Minor Changes
+
+- 28a2e47: Add an experimental global `m` to `/unstable` entries, the `useMessages()` counterpart of `t`: ``m(msg`Hello, ${{ name }}!`)`` renders a message from `msg()` with the current locale, without calling a hook. `gt-i18n/unstable` exports an `m` bound to the condition store. `@generaltranslation/react-core/unstable` and `gt-react/unstable` export an `m` that, like `t`, works only in client-rendered (SPA) apps, including at module level. In server-rendered apps, it throws in development and logs an error and renders the source in production; use `useMessages()` or `getMessages()` instead. Server components and `gt-react-native/unstable` do not export it, for the same reasons as `t`.
+
+### Patch Changes
+
+- 5e95a50: `initializeGT()` takes effect when it runs again. gt-i18n kept the first configuration and translation cache it was given, so after a Vite dev server restart the server kept calling the `loadTranslations` of the closed module runner, and every non-default locale failed with `Vite module runner has been closed` until the process restarted.
+
+  A second `initializeGT()` in `gt-svelte`, `gt-react`, `gt-react-native` or `gt-node` now replaces the configuration and the translation cache, and cached translations load again through the new loader. Call it once per module, not once per request. `gt-next` initializes itself on import and keeps its first initialization, as before.
+
+  gt-i18n no longer logs when a second instance is set, and no longer reads the `_GENERALTRANSLATION_LOG_LEVEL` environment variable, which only gated that log.
+
+- 550e8ca: In a client-rendered app, `t` and every hook outside a provider read `document.cookie` and `navigator.languages` and matched them to a configured locale on each call, which cost several times more than rendering the message. The browser now reads them once per task and matches the locales again only when they change. A cookie changed by other code is seen in the next task.
+- Updated dependencies [2c3f4f6]
+- Updated dependencies [2c3f4f6]
+- Updated dependencies [cdee423]
+- Updated dependencies [c30676f]
+- Updated dependencies [cdee423]
+- Updated dependencies [5e95a50]
+- Updated dependencies [cdee423]
+- Updated dependencies [550e8ca]
+- Updated dependencies [550e8ca]
+- Updated dependencies [7d49a34]
+- Updated dependencies [550e8ca]
+- Updated dependencies [ac272be]
+- Updated dependencies [28a2e47]
+  - generaltranslation@10.0.0-samsara.10
+  - @generaltranslation/format@1.0.0-samsara.10
+  - @generaltranslation/react-core@12.0.0-samsara.10
+  - gt-i18n@2.0.0-samsara.10
+
 ## 12.0.0-samsara.9
 
 ### Major Changes

@@ -1,5 +1,21 @@
 # @generaltranslation/react-core-linter
 
+## 0.2.0-samsara.11
+
+### Patch Changes
+
+- 7d49a34: The function returned by `useGT()` and `getGT()` is now named `t` throughout GT: `const t = useGT()`. Messages that named it `gt` say `t` instead: the `static-string` lint rule, the CLI's extraction warnings and the setup instructions it writes for AI agents, gt-i18n's tagged-template errors, and the Vue extractor's dynamic-content error. Nothing changes at runtime, and existing code that names it `gt` keeps working.
+- Updated dependencies [2c3f4f6]
+- Updated dependencies [2c3f4f6]
+- Updated dependencies [cdee423]
+- Updated dependencies [7b5075a]
+- Updated dependencies [2eec421]
+- Updated dependencies [48db495]
+- Updated dependencies [48db495]
+- Updated dependencies [550e8ca]
+  - generaltranslation@10.0.0-samsara.10
+  - @generaltranslation/icu@1.0.0-samsara.8
+
 ## 0.2.0-samsara.10
 
 ### Minor Changes

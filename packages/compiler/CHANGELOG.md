@@ -1,5 +1,23 @@
 # @generaltranslation/compiler
 
+## 2.0.0-samsara.9
+
+### Patch Changes
+
+- ac272be: The compiler no longer expands `` t`...` `` imported from `gt-tanstack-start`, since `gt-tanstack-start` no longer exports `t`, which is only available in client-rendered (SPA) apps. Other imports from `gt-tanstack-start` are handled as before.
+- Updated dependencies [2c3f4f6]
+- Updated dependencies [2c3f4f6]
+- Updated dependencies [cdee423]
+- Updated dependencies [c30676f]
+- Updated dependencies [7b5075a]
+- Updated dependencies [2eec421]
+- Updated dependencies [48db495]
+- Updated dependencies [48db495]
+- Updated dependencies [550e8ca]
+  - generaltranslation@10.0.0-samsara.10
+  - @generaltranslation/format@1.0.0-samsara.10
+  - @generaltranslation/icu@1.0.0-samsara.8
+
 ## 2.0.0-samsara.8
 
 ### Major Changes

@@ -1,5 +1,25 @@
 # @generaltranslation/format
 
+## 1.0.0-samsara.10
+
+### Minor Changes
+
+- cdee423: `GTIntl` formats in one locale: the `locale` of the call, else of the instance, else the default locale. It no longer puts the default locale and `en` behind it as fallbacks.
+  - A locale `Intl` has no data for formats in the host's locale, as `Intl` does on its own, where it used to format in the default locale. To keep that fallback, pass the list: `intl.formatNum(value, { locales: [locale, defaultLocale] })`. A call's `locales` reach `Intl` as they are.
+  - A custom alias is still replaced by its code before it reaches `Intl`.
+
+  Formatting a message tree through `GTIntl` is 2.4 times faster for a catalog that is mostly plain text, and 25% faster for one where every message has structure.
+
+### Patch Changes
+
+- c30676f: `GTIntl#requiresTranslation` decides once per configured locale. A `<T>` or variable render asks this once or twice, and each answer canonicalized both locales, at 1.5 to 2.3 µs; an answer for the default locale or one of `locales` now takes a few nanoseconds after the first. A locale that is not configured is still decided on every call, and results are unchanged.
+- Updated dependencies [7b5075a]
+- Updated dependencies [2eec421]
+- Updated dependencies [48db495]
+- Updated dependencies [48db495]
+- Updated dependencies [550e8ca]
+  - @generaltranslation/icu@1.0.0-samsara.8
+
 ## 1.0.0-samsara.9
 
 ### Major Changes

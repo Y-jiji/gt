@@ -1,5 +1,37 @@
 # gtx-cli
 
+## 3.0.0-samsara.11
+
+### Minor Changes
+
+- 6d94125: `gt upload`, `gt stage`, `gt translate` and `gt setup` now exit with code 1 when any file fails to upload, so CI notices. The run still finishes and prints the warnings summary first. Fonts that don't sync are reported as "Fonts not synced" and don't affect the exit code, since translation continues without them.
+- 2eec421: The CLI skips two more tagged-template mistakes from the unstable API with a warning, instead of extracting them. A `plural` or `selectordinal` branch that is not a plural category (`zero`, `one`, `two`, `few`, `many`, `other`) or an exact `=N` key, like the misspelled `onee`, was extracted and rendered the `other` branch. A `select` without `other` whose value TypeScript types as a finite union of string literals, with no branch for some of them, was extracted with an empty `other` and rendered no text for those values. A `select` over a value that is not such a union, as in a JavaScript file or over `string`, is extracted as before.
+
+  `gt validate` now exits with code 1 and no longer prints "Success!" when it skips a tagged-template message: it lists the skipped messages as errors, and `getValidateJson()` reports them with `level: 'error'`. `gt translate`, `gt stage` and `gt generate` still warn and continue.
+
+### Patch Changes
+
+- 7d49a34: The function returned by `useGT()` and `getGT()` is now named `t` throughout GT: `const t = useGT()`. Messages that named it `gt` say `t` instead: the `static-string` lint rule, the CLI's extraction warnings and the setup instructions it writes for AI agents, gt-i18n's tagged-template errors, and the Vue extractor's dynamic-content error. Nothing changes at runtime, and existing code that names it `gt` keeps working.
+- Updated dependencies [2c3f4f6]
+- Updated dependencies [2c3f4f6]
+- Updated dependencies [2c3f4f6]
+- Updated dependencies [cdee423]
+- Updated dependencies [c30676f]
+- Updated dependencies [7b5075a]
+- Updated dependencies [2eec421]
+- Updated dependencies [48db495]
+- Updated dependencies [48db495]
+- Updated dependencies [550e8ca]
+- Updated dependencies [7d49a34]
+  - @generaltranslation/api@0.7.0-samsara.3
+  - generaltranslation@10.0.0-samsara.10
+  - @generaltranslation/format@1.0.0-samsara.10
+  - @generaltranslation/icu@1.0.0-samsara.8
+  - @generaltranslation/vue-extractor@1.0.0-samsara.3
+  - @generaltranslation/python-extractor@1.0.0-samsara.3
+  - @generaltranslation/svelte-extractor@0.1.0-samsara.11
+  - @generaltranslation/supported-locales@2.1.49-samsara.3
+
 ## 3.0.0-samsara.10
 
 ### Major Changes

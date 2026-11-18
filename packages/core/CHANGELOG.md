@@ -1,5 +1,31 @@
 # generaltranslation
 
+## 10.0.0-samsara.10
+
+### Major Changes
+
+- 2c3f4f6: Batched writes (`uploadSourceFiles`, `uploadTranslations`, `moveFiles`, `overwriteTranslations`, `publishFiles`, `upsertAssets`) return `BatchWriteResponse<Response>`, where `Response` is the API's response type, such as `UploadSourceFilesResponse` from `@generaltranslation/api`, in place of `Response` itself. Each result is a `BatchWriteResult`: succeeded as the API describes it, or failed with an `error` and a `code` that may be any API `ErrorCode`, or `undefined` when its whole request failed without one, such as after a network error. Narrow on `status` before reading `error` or `code`; after `result.status === 'failed'`, `error` is a `string`. Code that annotated these results with the generated types moves to the new ones: `UploadSourceFilesResponse` → `BatchWriteResponse<UploadSourceFilesResponse>`, and `UploadSourceFilesResponse['results'][number]` → `BatchWriteResult<UploadSourceFilesResponse['results'][number]>`, both imported from `generaltranslation`. Runtime behavior is unchanged.
+- 2c3f4f6: `uploadTranslations` takes each source as a `TranslationSourceUpload`, which has no `locale`, and no longer sends one: the API looks the source file up and keeps the locale it was uploaded with. Remove `locale` from the `source` you pass. It also sends and uploads only the fields the request takes, so a source or translation passed with other fields, such as `formatMetadata`, no longer has them sent or uploaded.
+- cdee423: `GTIntl` formats in one locale: the `locale` of the call, else of the instance, else the default locale. It no longer puts the default locale and `en` behind it as fallbacks.
+  - A locale `Intl` has no data for formats in the host's locale, as `Intl` does on its own, where it used to format in the default locale. To keep that fallback, pass the list: `intl.formatNum(value, { locales: [locale, defaultLocale] })`. A call's `locales` reach `Intl` as they are.
+  - A custom alias is still replaced by its code before it reaches `Intl`.
+
+  Formatting a message tree through `GTIntl` is 2.4 times faster for a catalog that is mostly plain text, and 25% faster for one where every message has structure.
+
+### Patch Changes
+
+- Updated dependencies [2c3f4f6]
+- Updated dependencies [cdee423]
+- Updated dependencies [c30676f]
+- Updated dependencies [7b5075a]
+- Updated dependencies [2eec421]
+- Updated dependencies [48db495]
+- Updated dependencies [48db495]
+- Updated dependencies [550e8ca]
+  - @generaltranslation/api@0.7.0-samsara.3
+  - @generaltranslation/format@1.0.0-samsara.10
+  - @generaltranslation/icu@1.0.0-samsara.8
+
 ## 10.0.0-samsara.9
 
 ### Major Changes

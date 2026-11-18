@@ -1,5 +1,36 @@
 # @generaltranslation/react-core
 
+## 12.0.0-samsara.10
+
+### Major Changes
+
+- cdee423: `<Num>`, `<Currency>`, `<DateTime>`, `<RelativeTime>`, `<Plural>` and translated `<T>` content format in the locale they render in, alone. The default locale is no longer tried behind it when `Intl` has no data for that locale, which then formats in the browser's or the host's locale.
+
+  The `locales` prop reaches `Intl` as it is given: the active locale and the default locale are no longer added after it. To keep a fallback, list it: `<Num locales={[locale, defaultLocale]}>`.
+
+- ac272be: `t()` from `@generaltranslation/react-core/pure` and `gt-react` now reports every call outside a client-rendered (SPA) app, not only calls made before GT has a locale: in development it throws, and in production it logs the error and renders the source with its variables. Before, in production it logged a promise to fall back and then threw "Cannot read GT runtime context", and calls after `<GTProvider>` mounted were not reported. `t` from `/unstable` reports the same error. In a server-rendered app, use `useGT()` in components, `getGT()` in loaders and server functions, or `msg()` with `m()` from `useMessages()` or `getMessages()`.
+
+### Minor Changes
+
+- 28a2e47: Add an experimental global `m` to `/unstable` entries, the `useMessages()` counterpart of `t`: ``m(msg`Hello, ${{ name }}!`)`` renders a message from `msg()` with the current locale, without calling a hook. `gt-i18n/unstable` exports an `m` bound to the condition store. `@generaltranslation/react-core/unstable` and `gt-react/unstable` export an `m` that, like `t`, works only in client-rendered (SPA) apps, including at module level. In server-rendered apps, it throws in development and logs an error and renders the source in production; use `useMessages()` or `getMessages()` instead. Server components and `gt-react-native/unstable` do not export it, for the same reasons as `t`.
+
+### Patch Changes
+
+- 550e8ca: A `<T>` whose props stay the same no longer prepares its children and subscribes to its translation again on every render. In a client-rendered app without a provider, the function `useGT()` returns keeps its identity between renders, so effects that depend on it no longer run after each one.
+- Updated dependencies [2c3f4f6]
+- Updated dependencies [2c3f4f6]
+- Updated dependencies [cdee423]
+- Updated dependencies [c30676f]
+- Updated dependencies [5e95a50]
+- Updated dependencies [cdee423]
+- Updated dependencies [550e8ca]
+- Updated dependencies [550e8ca]
+- Updated dependencies [7d49a34]
+- Updated dependencies [28a2e47]
+  - generaltranslation@10.0.0-samsara.10
+  - @generaltranslation/format@1.0.0-samsara.10
+  - gt-i18n@2.0.0-samsara.10
+
 ## 12.0.0-samsara.9
 
 ### Major Changes

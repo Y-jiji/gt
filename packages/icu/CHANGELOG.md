@@ -1,5 +1,29 @@
 # @generaltranslation/icu
 
+## 1.0.0-samsara.8
+
+### Major Changes
+
+- 48db495: The hour of a `::j` skeleton is `Intl`'s to pick when a message is formatted, the same way for an ICU string and for a message tree. Nothing reads a locale when a message is parsed.
+  - **`parse()` no longer takes a `locale` option.** It rewrote `j` to the locale's hour symbol; `j` now stays in the skeleton. Remove the option.
+  - **Where `j` meets another hour symbol in a skeleton, the last one decides the clock,** as in ICU: `::hj` is the locale's hour and `::jh` a 12-hour one. `formatIcu` let `j` win and `formatMessageTree` the other symbol.
+  - **`formatIcu` no longer reads a region override,** like `en-u-rg-gbzzzz`, for `::j`: `Intl` does not read it, and `formatMessageTree` never did. Name the hour cycle with `-u-hc-`, as in `en-u-hc-h23`, which `Intl` reads.
+  - **`::jjjjj` throws in every locale.** `formatIcu` formatted it where the locale has a 24-hour clock.
+
+### Minor Changes
+
+- 48db495: `formatMessageTree` and `formatIcu` give their locales to `Intl` as they are, and no longer resolve them first.
+  - A locale that is not a language tag throws `Intl`'s `RangeError` when the message formats a number, a date or a plural with it. A message of text, variables and selects alone no longer throws for one.
+  - An empty list formats in the host's locale, as it does for `Intl`, instead of throwing.
+
+  Formatting a catalog that is mostly plain text is about 30% faster, and `formatMessageTree` bundles 150 bytes smaller after gzip.
+
+### Patch Changes
+
+- 7b5075a: `formatIcu` returns a message without ICU syntax as its text without parsing it. Formatting a catalog that is mostly plain text is about three times faster.
+- 2eec421: `@generaltranslation/icu/internal` exports `PLURAL_CATEGORIES`, CLDR's plural categories, for the CLI's tagged-template extraction.
+- 550e8ca: `templateToMessage` returns a template without holes as its text without building it.
+
 ## 0.2.0-samsara.7
 
 ### Patch Changes
