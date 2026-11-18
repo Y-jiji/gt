@@ -251,6 +251,20 @@ describe('experimentalChunkTranslations', () => {
         import { initializeGTSPA as __gt_chunk_initialize_spa, T } from 'gt-react';
         import { t } from 'gt-react/unstable';
         export const ready = initializeGTSPA({ defaultLocale: 'en', locales: ['fr'] });
+        export const save = () => t({ $_hash: "ab72d114d0d156a9", $_tree: "Save" });
+        export const hello = (name) => t(_gt(), { name });
+        export const short = () => t({ $_hash: "957bff241ed9ed44", $_tree: "Save", maxChars: 4 });
+        export const Shared = () => jsx(T, { children: 'Shared by every route', _hash: "0a9725453707110e" });function _gt() {return _gt.m || (_gt.m = { $_hash: "b785eb9d5af50191", $_tree: ["Hello, ", ["name"], "!"] });}function initializeGTSPA(config) {return __gt_chunk_initialize(__gt_chunk_initialize_spa, config, "__GT_CHUNK_TRANSLATIONS_UNSPLIT__");}"
+      `);
+    });
+
+    it('keeps the tagged templates of a build that does not precompute messages', async () => {
+      expect(await transform(MODULE, { ...ON, precomputeMessages: false }))
+        .toMatchInlineSnapshot(`
+        "import { initializeChunkTranslations as __gt_chunk_initialize } from "gt-react/chunk-translations";import { jsx } from 'react/jsx-runtime';
+        import { initializeGTSPA as __gt_chunk_initialize_spa, T } from 'gt-react';
+        import { t } from 'gt-react/unstable';
+        export const ready = initializeGTSPA({ defaultLocale: 'en', locales: ['fr'] });
         export const save = () => t({ $_hash: "ab72d114d0d156a9" })\`Save\`;
         export const hello = (name) => t({ $_hash: "b785eb9d5af50191" })\`Hello, \${{ name }}!\`;
         export const short = () => t({ maxChars: 4, $_hash: "957bff241ed9ed44" })\`Save\`;
@@ -390,6 +404,22 @@ export const { a } = await import(\`./a.js\`);`,
         )
       ).toEqual([SAVE, HELLO]);
     });
+
+    it.each([
+      [
+        'minified',
+        `t({$_hash:\`${SAVE}\`,$_tree:\`Save\`,context:\`button\`});t(s(),{name:e});function s(){return s.m||={$_hash:\`${HELLO}\`,$_tree:[\`Hello, \`,[\`name\`],\`!\`]}}`,
+      ],
+      [
+        'as the compiler writes them',
+        `t({ $_hash: "${SAVE}", $_tree: "Save" });\nt(_gt(), { name });\nfunction _gt() {\n\treturn _gt.m || (_gt.m = {\n\t\t$_hash: "${HELLO}",\n\t\t$_tree: ["Hello, ", ["name"], "!"]\n\t});\n}`,
+      ],
+    ])(
+      'finds the hashes of precomputed messages, at their call and declared at module scope, %s',
+      (_name, code) => {
+        expect(findChunkHashes(code, HASHES)).toEqual([SAVE, HELLO]);
+      }
+    );
 
     it.each([
       [
@@ -1137,6 +1167,68 @@ export const { a } = await import(\`./a.js\`);`,
         'Some translations are not split by chunk: 1 for "fr" (0.0 kB)'
       );
     });
+
+    it.each([
+      ['precomputed', true],
+      ['left as tagged templates', false],
+    ])(
+      'leaves no translation of a t template unsplit when messages are %s',
+      async (_name, precomputeMessages) => {
+        const options = { ...ON, precomputeMessages };
+        const translations = {
+          ab72d114d0d156a9: 'Enregistrer',
+          b785eb9d5af50191: ['Bonjour, ', ['name'], ' !'],
+        };
+        const created = createPlugins(options, 'vite', {
+          'translations/fr.json': JSON.stringify(translations),
+        });
+        const compiled = await transform(
+          `import { initializeGTSPA } from 'gt-react';
+import { t } from 'gt-react/unstable';
+export const ready = initializeGTSPA({});
+export const save = () => t\`Save\`;
+export const hello = (name) => t\`Hello, \${{ name }}!\`;`,
+          options,
+          created
+        );
+        expect(compiled!.includes('$_tree')).toBe(precomputeMessages);
+        const vite = created.plugins[0].vite as {
+          configResolved: (config: object) => void;
+          renderChunk: (code: string) => string | null;
+          generateBundle: (
+            this: object,
+            options: object,
+            bundle: object
+          ) => void;
+        };
+        vite.configResolved({ base: '/', build: { assetsDir: 'assets' } });
+
+        const emitted: Record<string, string> = {};
+        vite.generateBundle.call(
+          {
+            emitFile: (file: { fileName: string; source: string }) =>
+              (emitted[file.fileName.replace(/\.[0-9a-f]{8}\.json$/, '')] =
+                file.source),
+          },
+          {},
+          {
+            'assets/index.js': {
+              type: 'chunk',
+              fileName: 'assets/index.js',
+              code: vite.renderChunk(compiled!),
+              imports: [],
+              dynamicImports: [],
+              isEntry: true,
+              moduleIds: [path.join(created.cwd, 'App.jsx')],
+            },
+          }
+        );
+        expect(JSON.parse(emitted['assets/index.fr'])).toEqual({
+          t: translations,
+        });
+        expect(Object.keys(emitted)).not.toContain('assets/gt-unsplit.fr');
+      }
+    );
 
     it('keeps the translation of a msg that a t template shares its text with, and of nothing unused', async () => {
       const created = createPlugins(ON, 'vite', {
@@ -1980,8 +2072,20 @@ export const unused = (name) => t\`Hello, \${{ name }}!\`;`,
     };
     // A call site as a bundler prints it, where findChunkHashes reads its hash
     const callSite = (hash: string) => `t({$_hash:"${hash}"})`;
+    // And as a precomputed message, at its call and declared at module scope
+    const CALL_SITES = [
+      callSite,
+      (hash: string) => `t({$_hash:"${hash}",$_tree:"Title"})`,
+      (hash: string) =>
+        `t(_gt(),{name});function _gt(){return _gt.m||(_gt.m={$_hash:"${hash}",$_tree:["Title ",["name"]]})}`,
+    ];
+    const NAMES = Object.keys(HASH);
     const site = (...names: (keyof typeof HASH)[]) =>
-      names.map((name) => callSite(HASH[name])).join(';');
+      names
+        .map((name) =>
+          CALL_SITES[NAMES.indexOf(name) % CALL_SITES.length](HASH[name])
+        )
+        .join(';');
     const chunk = (
       fileName: string,
       modules: Record<string, string>,

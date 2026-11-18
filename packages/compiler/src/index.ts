@@ -61,6 +61,10 @@ import {
 import { getPageBase } from './transform/chunk-translations/startupScript';
 import { Logger } from './state/Logger';
 import { jsxInsertionPass } from './passes/jsxInsertionPass';
+import {
+  findPrecomputedMessageSupport,
+  PRECOMPUTED_MESSAGES_UNSUPPORTED_WARNING,
+} from './transform/injection/precomputedMessageSupport';
 import { runtimeTranslatePass } from './passes/runtimeTranslatePass';
 import {
   importsUnstableSource,
@@ -267,6 +271,15 @@ const gtUnplugin = createUnplugin<GTUnpluginOptions | undefined>(
       ...options,
       ...(loadedGTConfig ? { gtConfig: loadedGTConfig } : {}),
     };
+    if (
+      resolvedOptions.precomputeMessages === undefined &&
+      findPrecomputedMessageSupport(process.cwd()) === false
+    ) {
+      resolvedOptions.precomputeMessages = false;
+      if (shouldWarn(options.logLevel)) {
+        console.warn(PRECOMPUTED_MESSAGES_UNSUPPORTED_WARNING);
+      }
+    }
 
     if (shouldWarn(options.logLevel)) {
       if (gtConfigLoadResult.status === 'missing') {

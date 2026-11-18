@@ -45,9 +45,12 @@ export type TranslationAssignment = {
  */
 export const MIN_SHARED_CHUNK_MESSAGES = 20;
 
-// The `$_hash` option of a `t` template and the `_hash` prop of a <T>, as the
-// compiler writes them; a change to that compiled shape (such as precomputed
-// string messages) must extend this pattern, or those messages leave the files.
+// The hash of a call site, in each form the compiler writes: the `$_hash`
+// option of a `t` template, the `$_hash` of a precomputed message, written
+// at its call or in the function declared for it at module scope, which a
+// bundler drops with its last call site, and the `_hash` prop of a <T>. Any
+// other compiled shape (such as a precomputed <T>) must extend this pattern,
+// or those messages leave the files.
 const HASH_ARGUMENT =
   /[{,]\s*["']?\$?_hash["']?\s*:\s*(["'`])([0-9a-f]{16})\1/g;
 

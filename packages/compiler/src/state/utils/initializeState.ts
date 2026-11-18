@@ -30,6 +30,7 @@ const DEFAULT_SETTINGS: PluginSettings = {
   autoderive: { jsx: false, strings: false },
   _debugHashManifest: false,
   devHotReload: { strings: false, jsx: false },
+  precomputeMessages: true,
 };
 
 /**
@@ -81,6 +82,8 @@ export function initializeState(
     // Dev builds keep loading translations at runtime
     chunkTranslations:
       process.env.NODE_ENV === 'production' ? chunkTranslations : undefined,
+    precomputeMessages:
+      options.precomputeMessages ?? DEFAULT_SETTINGS.precomputeMessages,
     filename,
   };
 

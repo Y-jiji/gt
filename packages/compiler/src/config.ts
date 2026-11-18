@@ -111,6 +111,15 @@ export interface PluginConfig
    * the `GT_CHUNK_TRANSLATIONS_PREVIOUS` environment variable.
    */
   experimentalChunkTranslationsPrevious?: string;
+  /**
+   * Replaces each static `t` template from an `/unstable` entry with a call
+   * that reads its message, built at compile time and declared once at module
+   * scope, so the call site builds no message tree when it renders. An older
+   * `t` does not read these calls, so the default is true only when no
+   * installed GT runtime is older than that; false keeps the tagged templates
+   * and only injects their hashes.
+   */
+  precomputeMessages?: boolean;
 }
 
 /**
@@ -139,6 +148,8 @@ export interface PluginSettings {
   devHotReload: { strings: boolean; jsx: boolean };
   /** Set when a build writes translations per chunk, which the build then splits */
   chunkTranslations?: ChunkTranslations;
+  /** Replace static unstable t templates with calls that read a precomputed message */
+  precomputeMessages: boolean;
 }
 
 /**

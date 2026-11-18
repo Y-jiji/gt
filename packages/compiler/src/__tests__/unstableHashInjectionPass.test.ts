@@ -80,7 +80,7 @@ describe('unstableHashInjectionPass', () => {
     );
   });
 
-  it('rewrites the tag into the options form', async () => {
+  it('replaces a t template with a call that passes its precomputed message', async () => {
     const save = hashSource({ source: 'Save', dataFormat: 'MESSAGE_TREE' });
     const button = hashSource({
       source: 'Save',
@@ -88,9 +88,9 @@ describe('unstableHashInjectionPass', () => {
       context: 'button',
     });
     const output = await compile("t`Save`;\nt({ context: 'button' })`Save`;");
-    expect(output).toContain(`t({ $_hash: "${save}" })\`Save\``);
+    expect(output).toContain(`t({ $_hash: "${save}", $_tree: "Save" });`);
     expect(output).toContain(
-      `t({ context: 'button', $_hash: "${button}" })\`Save\``
+      `t({ $_hash: "${button}", $_tree: "Save", context: "button" });`
     );
   });
 
